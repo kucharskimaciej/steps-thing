@@ -2,6 +2,10 @@
 
 Project tracking checklist generated from `tasks/`. Mark items complete here as work lands.
 
+## Project Notes
+
+- The app should be built mobile-first. Keep early layout work basic and structural; final visual design can be refined later.
+
 ## 1. Project Setup
 
 Context: [tasks/1 - project setup/context.md](tasks/1%20-%20project%20setup/context.md)
@@ -9,7 +13,7 @@ Context: [tasks/1 - project setup/context.md](tasks/1%20-%20project%20setup/cont
 - [x] [Initialize Next.js and Convex app](tasks/1%20-%20project%20setup/1%20-%20initialize%20nextjs%20convex%20app.md)
 - [x] [Configure auth and route protection](tasks/1%20-%20project%20setup/2%20-%20configure%20auth%20and%20route%20protection.md)
   - Manual Clerk/Convex sign-in verification is pending real local environment values.
-- [ ] [Create app shell navigation and responsive layout](tasks/1%20-%20project%20setup/3%20-%20create%20app%20shell%20navigation%20and%20responsive%20layout.md)
+- [x] [Create app shell navigation and responsive layout](tasks/1%20-%20project%20setup/3%20-%20create%20app%20shell%20navigation%20and%20responsive%20layout.md)
 
 ## 2. Data Model And Migrations
 
