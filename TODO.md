@@ -6,7 +6,7 @@ Project tracking checklist generated from `tasks/`. Mark items complete here as 
 
 Context: [tasks/1 - project setup/context.md](tasks/1%20-%20project%20setup/context.md)
 
-- [ ] [Initialize Next.js and Convex app](tasks/1%20-%20project%20setup/1%20-%20initialize%20nextjs%20convex%20app.md)
+- [x] [Initialize Next.js and Convex app](tasks/1%20-%20project%20setup/1%20-%20initialize%20nextjs%20convex%20app.md)
 - [ ] [Configure auth and route protection](tasks/1%20-%20project%20setup/2%20-%20configure%20auth%20and%20route%20protection.md)
 - [ ] [Create app shell navigation and responsive layout](tasks/1%20-%20project%20setup/3%20-%20create%20app%20shell%20navigation%20and%20responsive%20layout.md)
 
@@ -72,7 +72,7 @@ Context: [tasks/8 - quality security and release/context.md](tasks/8%20-%20quali
 
 Run the relevant checks for each task before marking it complete. At minimum, setup requires:
 
-- [ ] `npm run typecheck`
-- [ ] `npm run lint`
-- [ ] `npm test`
-- [ ] `npm run build`
+- [x] `pnpm typecheck`
+- [x] `pnpm lint`
+- [x] `pnpm test`
+- [x] `pnpm build`

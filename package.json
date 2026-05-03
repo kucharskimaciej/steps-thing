@@ -1,0 +1,44 @@
+{
+  "name": "steps-thing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "convex:dev": "convex dev",
+    "dev:all": "concurrently --kill-others --names next,convex --prefix-colors blue,magenta \"pnpm dev\" \"pnpm convex:dev\"",
+    "build": "next build",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@base-ui/react": "latest",
+    "class-variance-authority": "latest",
+    "clsx": "latest",
+    "convex": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwind-merge": "latest"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "latest",
+    "@tailwindcss/postcss": "latest",
+    "@testing-library/dom": "latest",
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "jsdom": "latest",
+    "tailwindcss": "latest",
+    "typescript": "^5.9.3",
+    "vitest": "latest"
+  }
+}
