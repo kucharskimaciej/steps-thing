@@ -7,7 +7,8 @@ Project tracking checklist generated from `tasks/`. Mark items complete here as 
 Context: [tasks/1 - project setup/context.md](tasks/1%20-%20project%20setup/context.md)
 
 - [x] [Initialize Next.js and Convex app](tasks/1%20-%20project%20setup/1%20-%20initialize%20nextjs%20convex%20app.md)
-- [ ] [Configure auth and route protection](tasks/1%20-%20project%20setup/2%20-%20configure%20auth%20and%20route%20protection.md)
+- [x] [Configure auth and route protection](tasks/1%20-%20project%20setup/2%20-%20configure%20auth%20and%20route%20protection.md)
+  - Manual Clerk/Convex sign-in verification is pending real local environment values.
 - [ ] [Create app shell navigation and responsive layout](tasks/1%20-%20project%20setup/3%20-%20create%20app%20shell%20navigation%20and%20responsive%20layout.md)
 
 ## 2. Data Model And Migrations

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@base-ui/react": "latest",
+    "@clerk/nextjs": "^7.3.0",
     "class-variance-authority": "latest",
     "clsx": "latest",
     "convex": "latest",
