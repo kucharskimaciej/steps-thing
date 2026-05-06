@@ -18,8 +18,8 @@ Provide repeatable tooling to import or transform legacy Firebase-shaped data in
    - `view_records` to `viewRecords`
    - `smart_tags` to `smartTags`
    - `removed_smart_tags` to `removedSmartTags`
-   - `snapshot_url` to `snapshotUrl`
-   - `thumbnail_url` to `thumbnailUrl`
+   - `snapshot_url` to `snapshotStorageKey`
+   - `thumbnail_url` to `thumbnailStorageKey`
 3. Backfill missing `kind` to `step`.
 4. Convert legacy `dance` into `feeling` if present.
 5. For practice records without `start_of_day`, set `startOfDay` from `date`.
@@ -55,7 +55,7 @@ Required tests:
 - Missing `kind` becomes `step`.
 - Legacy `dance` maps to `feeling`.
 - Missing `start_of_day` is derived from `date`.
-- Video `snapshot_url` and `thumbnail_url` map into camelCase fields.
+- Video `snapshot_url` and `thumbnail_url` map into Google Cloud Storage object-key fields.
 - Dry run reports counts and performs no writes.
 
 ## Acceptance Criteria
@@ -63,4 +63,3 @@ Required tests:
 - Migration can be tested without production credentials.
 - Backfills are explicit admin operations.
 - Import logic is deterministic and documented.
-

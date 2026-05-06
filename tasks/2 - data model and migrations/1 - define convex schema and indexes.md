@@ -28,6 +28,7 @@ Create the Convex schema for steps and practice sessions, including indexes need
    - `createdAt`
    - `updatedAt`
    - optional `lastViewedAt`
+   - Do not store Google Cloud Storage blobs in Convex; store only metadata and object keys.
 2. Define `practiceSessions` table with:
    - `ownerId`
    - `name`
@@ -38,7 +39,8 @@ Create the Convex schema for steps and practice sessions, including indexes need
 3. Define validators for:
    - Step difficulty: `1 | 2 | 3 | 5 | 8`.
    - Step kind: `step | inspiration | routine`.
-   - Video object.
+   - Video object, including `hash`, Google Cloud Storage `storageKey`, optional `snapshotStorageKey`, optional `thumbnailStorageKey`, and dimensions.
+   - Do not persist signed URLs in Convex; generate them at upload/playback/public-sharing boundaries.
    - Practice record.
 4. Add indexes:
    - `steps.by_owner`
@@ -76,4 +78,4 @@ Expected:
 - Schema represents every field in the spec.
 - Indexes support owner-scoped queries.
 - Validators reject invalid difficulty, kind, video, and practice record shapes.
-
+- Video schema is ready for Google Cloud Storage: original, snapshot, and thumbnail fields are object keys, not Convex storage IDs or long-lived URLs.
