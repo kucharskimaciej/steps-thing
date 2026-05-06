@@ -30,7 +30,7 @@ Create a repeatable checklist for validating the rewrite before production cutov
 2. Create an environment checklist:
    - Convex deployment.
    - Auth provider config.
-   - Storage provider config.
+   - Google Cloud Storage bucket, CORS, IAM, and signed URL config.
    - Video processing worker config.
    - Required secrets.
    - Required public environment variables.
@@ -66,4 +66,3 @@ Manual checks:
 - Release validation does not depend on memory.
 - Operational requirements are documented before production cutover.
 - Smoke test covers all primary user workflows.
-

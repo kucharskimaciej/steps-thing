@@ -28,8 +28,8 @@ Use:
 - Next.js App Router.
 - React components and hooks.
 - Convex for database, server functions, file metadata, search helper queries, and background processing state.
-- A file storage provider for original videos and generated images. Convex file storage can be used if video size and processing requirements fit; otherwise use object storage such as Cloudflare R2, S3, or Firebase Storage while keeping canonical metadata in Convex.
-- A background worker or serverless job for video thumbnail/snapshot generation. Convex actions can orchestrate this, but ffmpeg execution may need a separate worker/runtime depending on hosting constraints.
+- Google Cloud Storage for original videos and generated snapshot/thumbnail images. Keep canonical metadata, object keys, duplicate hashes, and processing state in Convex.
+- A background worker or serverless job for video thumbnail/snapshot generation. Convex actions can orchestrate this, but ffmpeg execution should run in a runtime that can use ffmpeg and read/write Google Cloud Storage objects.
 
 Recommended top-level areas:
 
@@ -65,9 +65,9 @@ Rules:
 - Public step page `/s/[stepId]` can fetch and display an individual step without ownership checks.
 - Public session reads existed in legacy rules, but no active public session UI exists. Do not expose session pages publicly unless intentionally redesigned.
 - Storage access in the legacy app allows authenticated users to read/write any file; the rewrite should be stricter:
-  - Users can upload only into their own namespace.
-  - Users can read their own original videos.
-  - Public step sharing needs video URLs that are readable by public recipients, signed for the shared page, or proxied by the app.
+  - Users can upload only into their own Google Cloud Storage namespace through server-issued signed upload URLs.
+  - Users can read their own original videos and generated images through server-issued signed read URLs.
+  - Public step sharing should issue short-lived signed read URLs for the shared page.
 
 ## 4. Core Domain Model
 
@@ -103,9 +103,9 @@ Fields:
 Fields:
 
 - `hash`: content-derived identifier for duplicate detection.
-- `url`: playable URL for the original video.
-- `snapshotUrl`: optional storage path or URL for a full-size preview image.
-- `thumbnailUrl`: optional storage path or URL for a small thumbnail image.
+- `storageKey`: Google Cloud Storage object key for the original video.
+- `snapshotStorageKey`: optional Google Cloud Storage object key for the full-size preview image.
+- `thumbnailStorageKey`: optional Google Cloud Storage object key for the small thumbnail image.
 - `width`: optional source video width.
 - `height`: optional source video height.
 
@@ -467,7 +467,7 @@ Behavior:
 
 Access implications:
 
-- Public page must be able to play the primary video. If private storage is used, implement signed read access or a server-mediated public playback route.
+- Public page must be able to play the primary video through a short-lived Google Cloud Storage signed read URL.
 
 ### 6.9 Sessions
 
@@ -607,9 +607,9 @@ User flow:
 3. If user cancels, mark videos field touched/validated.
 4. Compute a deterministic-ish file hash.
 5. If the same hash is already selected in the current form, do not add it again.
-6. If a video with this hash already exists in storage for the user, reuse its URL.
-7. Otherwise upload original video.
-8. Add `{ hash, url }` to form videos.
+6. If a video with this hash already exists in Google Cloud Storage for the user, reuse its `storageKey`.
+7. Otherwise request a signed upload URL from the server and upload the original video to Google Cloud Storage.
+8. Add `{ hash, storageKey }` to form videos. Resolve playback URLs separately from stored Convex metadata.
 9. Trigger validation.
 
 Hashing behavior:
@@ -626,26 +626,27 @@ Storage path convention:
 - Original videos should be namespaced by user and hash, equivalent to `videos/{ownerId}/{hash}`.
 - Generated snapshots should be equivalent to `snapshots/{ownerId}/{hash}.jpg`.
 - Generated thumbnails should be equivalent to `thumbnails/{ownerId}/{hash}.jpg`.
+- Object keys, not long-lived public URLs, should be stored in Convex. Signed URLs should be generated when upload, playback, public sharing, or processing needs temporary access.
 
 ### 8.2 Video Processing Job
 
 Trigger:
 
-- When a step is created or updated and any video lacks `snapshotUrl`, `thumbnailUrl`, `width`, or `height`.
+- When a step is created or updated and any video lacks `snapshotStorageKey`, `thumbnailStorageKey`, `width`, or `height`.
 
 Behavior:
 
 - Skip deleted steps.
 - Skip processing if all videos already have required processed fields.
 - For each unprocessed video:
-  - Download original video.
+  - Download original video from Google Cloud Storage.
   - Generate one snapshot image at 50% of video duration.
   - Generate one thumbnail image at 50% of video duration, width 256 px and proportional height.
   - Read source video dimensions.
-  - Upload generated images.
+  - Upload generated images to Google Cloud Storage.
   - Update the video object with:
-    - `snapshotUrl`
-    - `thumbnailUrl`
+    - `snapshotStorageKey`
+    - `thumbnailStorageKey`
     - `width`
     - `height`
 - Update only video metadata without overwriting unrelated step fields.
@@ -668,7 +669,7 @@ Core behavior:
   - muted by default
   - optional autoplay
 - Background:
-  - If `snapshotUrl` exists and background mode is enabled, render a blurred snapshot behind the video.
+  - If `snapshotStorageKey` exists and background mode is enabled, resolve a read URL and render a blurred snapshot behind the video.
 - Center overlay:
   - Clicking video area toggles play/pause.
   - Show large play icon while not playing.
@@ -1015,7 +1016,7 @@ Legacy data migrations to account for:
 - Some old records may lack `kind`; default to `step`.
 - Some old records may use `dance`; convert/ignore in favor of `feeling`.
 - Some old practice records may lack `startOfDay`; default it from old `date`.
-- Some videos may lack `snapshotUrl`, `thumbnailUrl`, `width`, or `height`; enqueue processing.
+- Some videos may lack `snapshotStorageKey`, `thumbnailStorageKey`, `width`, or `height`; enqueue processing.
 - Old field names use snake_case:
   - `owner_uid`
   - `created_at`
@@ -1046,9 +1047,9 @@ These are observed product gaps in the current app and should be addressed inten
 - Create step persistence is disabled in the active UI.
 - Sessions, session detail, historical sessions, session cards, and session providers render placeholders despite legacy intended behavior being present.
 - Some debug `console.log` calls and debug form JSON are visible/active.
-- Public step access depends on public video readability, which should be explicitly designed.
+- Public step access depends on short-lived Google Cloud Storage signed read URLs.
 - Legacy Firestore rules allow public `get` for sessions; rewrite should avoid unintentionally public session access.
-- Legacy storage rules are broad for authenticated users; rewrite should use owner-scoped storage permissions.
+- Legacy storage rules are broad for authenticated users; rewrite should use owner-scoped Google Cloud Storage object keys and server-issued signed URLs.
 - `updatedAt` is used by sorting but not consistently written by all mutations; rewrite should set it reliably.
 
 ## 19. Acceptance Criteria By Feature
@@ -1101,6 +1102,7 @@ These are observed product gaps in the current app and should be addressed inten
 ### Video Processing
 
 - Uploaded videos eventually receive snapshot, thumbnail, width, and height.
+- Original videos, snapshots, and thumbnails are stored in Google Cloud Storage with Convex metadata.
 - Processing is idempotent and does not loop forever.
 - Failed processing is visible to developers/admins.
 
@@ -1108,8 +1110,8 @@ These are observed product gaps in the current app and should be addressed inten
 
 1. Set up Next.js, auth, Convex schema, and protected/public route shells.
 2. Implement step data model, migrations/import tooling, and owner-scoped queries.
-3. Implement video upload, hashing, storage metadata, and duplicate detection.
-4. Implement video processing pipeline and backfill job.
+3. Implement Google Cloud Storage video upload, hashing, storage metadata, and duplicate detection.
+4. Implement Google Cloud Storage video processing pipeline and backfill job.
 5. Build shared video player and modal playback.
 6. Build step form with validation, smart tags, tokens, autocomplete, and video input.
 7. Implement create/edit/inline-edit workflows and variation merging.
@@ -1119,4 +1121,3 @@ These are observed product gaps in the current app and should be addressed inten
 11. Restore or intentionally remove sessions; if restored, implement sessions and historical practice.
 12. Add migration/backfill scripts for legacy data.
 13. Add tests for tokenization, smart tags, search filters, sort order, variation scoring, practice duplicate prevention, and authorization.
-

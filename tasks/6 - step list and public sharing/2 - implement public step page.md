@@ -16,7 +16,7 @@ Build the public route for shared individual steps.
    - Primary video.
    - Tags.
 5. Ensure the public page can play the primary video:
-   - Use public-readable URLs, signed URLs, or a server-mediated read endpoint.
+   - Generate short-lived signed Google Cloud Storage read URLs from stored object keys.
 6. Do not expose owner-private controls such as edit, practice, sessions, or private notes beyond what is intentionally shown by the read-only step component.
 
 ## Suggested Files
@@ -24,7 +24,7 @@ Build the public route for shared individual steps.
 - Create `app/s/[stepId]/page.tsx`.
 - Create `components/steps/public-step-view.tsx`.
 - Modify `convex/steps.ts` public query if needed.
-- Create `lib/video/public-video-url.ts` if signed/proxied URLs are needed.
+- Create `lib/video/public-video-url.ts` for signed Google Cloud Storage read URLs.
 
 ## Verification
 
@@ -48,4 +48,3 @@ Manual checks:
 
 - Public sharing works without authentication.
 - Public data exposure is limited to the intended step view.
-

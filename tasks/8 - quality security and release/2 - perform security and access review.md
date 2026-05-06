@@ -15,9 +15,10 @@ Verify that private data and storage access are owner-scoped and public sharing 
 5. Confirm public step API returns only fields needed by the public page.
 6. Confirm sessions are not public unless explicitly intended.
 7. Review upload/storage paths:
-   - Owner-scoped upload paths.
+   - Owner-scoped Google Cloud Storage object keys.
    - No cross-user overwrites.
-   - Public playback uses signed/proxied/public URLs intentionally.
+   - Signed upload URLs require authenticated ownership.
+   - Public playback uses short-lived signed Google Cloud Storage read URLs intentionally.
 8. Document the access model in a security note.
 
 ## Suggested Files
@@ -48,4 +49,3 @@ Manual checks:
 - Access model is documented.
 - Security checks are backed by tests.
 - Public sharing behavior is explicit.
-

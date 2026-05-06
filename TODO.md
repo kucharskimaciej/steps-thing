@@ -28,8 +28,8 @@ Context: [tasks/2 - data model and migrations/context.md](tasks/2%20-%20data%20m
 
 Context: [tasks/3 - video storage and playback/context.md](tasks/3%20-%20video%20storage%20and%20playback/context.md)
 
-- [ ] [Implement video hashing, upload, and duplicate detection](tasks/3%20-%20video%20storage%20and%20playback/1%20-%20implement%20video%20hashing%20upload%20and%20duplicate%20detection.md)
-- [ ] [Implement video processing pipeline](tasks/3%20-%20video%20storage%20and%20playback/2%20-%20implement%20video%20processing%20pipeline.md)
+- [ ] [Implement Google Cloud Storage video hashing, upload, and duplicate detection](tasks/3%20-%20video%20storage%20and%20playback/1%20-%20implement%20video%20hashing%20upload%20and%20duplicate%20detection.md)
+- [ ] [Implement Google Cloud Storage video processing pipeline](tasks/3%20-%20video%20storage%20and%20playback/2%20-%20implement%20video%20processing%20pipeline.md)
 - [ ] [Build video player and modal](tasks/3%20-%20video%20storage%20and%20playback/3%20-%20build%20video%20player%20and%20modal.md)
 
 ## 4. Step Authoring

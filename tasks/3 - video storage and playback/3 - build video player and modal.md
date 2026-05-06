@@ -14,7 +14,7 @@ Create the reusable video player used by feed, public pages, list modals, and se
    - metadata preload
    - muted by default
    - optional autoplay
-2. Add blurred snapshot background when `snapshotUrl` exists.
+2. Add blurred snapshot background when a resolved snapshot URL exists for `snapshotStorageKey`.
 3. Add center play overlay that toggles play/pause.
 4. Add top-right controls:
    - mute/unmute.
@@ -67,4 +67,3 @@ Manual checks:
 - Player is reusable across all pages.
 - View tracking events match the spec.
 - Controls are accessible by button semantics and labels.
-
