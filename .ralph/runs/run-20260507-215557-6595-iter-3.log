@@ -116582,3 +116582,3160 @@ index 0000000000000000000000000000000000000000..a7c4338132b27f188212056cb205571e
 
 codex
 Progress and run logs are appended. I’m making the required second commit for progress/log updates, then I’ll confirm the working tree is clean and capture the final commit line.
+exec
+/bin/zsh -lc 'git add -A && git commit -m "chore(ralph): record feed progress"' in /Users/maciejkucharski/work/steps-thing
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index d66213ad36f5210b0876a4a7f718fc96709c9ec1..5ca3d0edce9182883f2dd8b5e8f86c5a07f73bd0
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -427,3 +427,39 @@
+   - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
+   - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
+ ---
++
++## [2026-05-07 22:23:20 CEST] - S05-03-build-virtualized-feed-and-step-actions: Build Virtualized Feed And Step Actions
++Thread:
++Run: 20260507-215557-6595 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 0c6a6e7 feat(feed): add virtualized step feed
++- Post-commit status: `.ralph/runs/run-20260507-215557-6595-iter-3.log` modified by active run logging before progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; feed workflow verified by component tests
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - components/feed/feed-step-card.tsx
++  - components/feed/options-menu.tsx
++  - components/feed/step-actions.tsx
++  - components/feed/steps-feed.tsx
++  - components/steps/feed-step-list.tsx
++  - components/steps/step-tags.tsx
++  - components/steps/variation-feed-modal.tsx
++  - tests/components/feed.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-3.log
++- What was implemented
++  Main `/feed` now queries owned steps through the existing wrapper, applies search/filter/sort, renders a virtualized card feed, sizes primary videos from stored dimensions with a `60vh` cap, mounts visible videos only, displays tags, variation counts, practice action, options menu, copy link, and inline edit entry. Variation overlay shows same-key related steps only.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep `FeedStepList` as the Convex/auth wrapper and put testable feed behavior in `components/feed/steps-feed.tsx`.
++  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
++  - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
++---
+diff --git a/components/feed/feed-step-card.tsx b/components/feed/feed-step-card.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c853a0c259d5922714b402480e1423f7236c21e1
+--- /dev/null
++++ b/components/feed/feed-step-card.tsx
+@@ -0,0 +1,117 @@
++"use client";
++
++import { Pencil, Shapes } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { StepTags } from "@/components/steps/step-tags";
++import { VideoPlayer } from "@/components/video/video-player";
++import { OptionsMenu } from "./options-menu";
++import { StepActions } from "./step-actions";
++
++type FeedStepCardProps = {
++  step: Doc<"steps">;
++  relatedSteps: Doc<"steps">[];
++  isVisible: boolean;
++  origin?: string;
++  onShowVariations: (step: Doc<"steps">) => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function FeedStepCard({
++  step,
++  relatedSteps,
++  isVisible,
++  origin,
++  onShowVariations,
++  onEditStep,
++}: FeedStepCardProps) {
++  const primaryVideo = step.videos[0];
++  const hasVariations = relatedSteps.length > 0;
++  const tags = [
++    step.kind,
++    `difficulty ${step.difficulty}`,
++    ...step.feeling,
++    ...step.tags,
++    ...step.smartTags,
++    ...step.artists,
++  ];
++
++  return (
++    <article
++      aria-label={step.name}
++      className="overflow-hidden rounded-md border border-[var(--border)] bg-white shadow-sm"
++    >
++      {primaryVideo ? (
++        <div
++          data-testid={`feed-video-frame-${step._id}`}
++          className="w-full overflow-hidden bg-black"
++          style={{
++            aspectRatio:
++              primaryVideo.width && primaryVideo.height
++                ? `${primaryVideo.width} / ${primaryVideo.height}`
++                : "16 / 9",
++            maxHeight: "60vh",
++          }}
++        >
++          {isVisible ? (
++            <VideoPlayer
++              videoUrl={primaryVideo.storageKey}
++              snapshotUrl={primaryVideo.snapshotStorageKey}
++              width={primaryVideo.width}
++              height={primaryVideo.height}
++              autoPlay={typeof IntersectionObserver !== "undefined"}
++              enableFullSize
++              ariaLabel={`${step.name} video`}
++            />
++          ) : null}
++        </div>
++      ) : null}
++
++      <div className="flex flex-col gap-4 p-4">
++        <div className="flex items-start justify-between gap-4">
++          <div className="min-w-0">
++            <h2 className="truncate text-xl font-semibold">{step.name}</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              #{step.identifier}
++            </p>
++          </div>
++          <OptionsMenu
++            stepId={step._id}
++            stepName={step.name}
++            origin={origin}
++            hasVariations={hasVariations}
++            onShowVariations={() => onShowVariations(step)}
++            onEdit={() => onEditStep(step._id)}
++          />
++        </div>
++
++        <StepTags values={tags} />
++
++        <div className="flex flex-wrap items-center gap-2">
++          {hasVariations ? (
++            <button
++              type="button"
++              className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++              aria-label={`Show ${relatedSteps.length} ${
++                relatedSteps.length === 1 ? "variation" : "variations"
++              }`}
++              onClick={() => onShowVariations(step)}
++            >
++              <Shapes size={16} aria-hidden="true" />
++              {relatedSteps.length}
++            </button>
++          ) : null}
++          <StepActions stepId={step._id} stepName={step.name} />
++          <button
++            type="button"
++            aria-label={`Edit ${step.name}`}
++            className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++            onClick={() => onEditStep(step._id)}
++          >
++            <Pencil size={16} aria-hidden="true" />
++            Edit
++          </button>
++        </div>
++      </div>
++    </article>
++  );
++}
+diff --git a/components/feed/options-menu.tsx b/components/feed/options-menu.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d519dbe5832490060595b3b1f74eff12508cf85
+--- /dev/null
++++ b/components/feed/options-menu.tsx
+@@ -0,0 +1,121 @@
++"use client";
++
++import { Copy, MoreHorizontal, Pencil, Shapes, X } from "lucide-react";
++import { useEffect, useRef, useState } from "react";
++
++type OptionsMenuProps = {
++  stepId: string;
++  stepName: string;
++  origin?: string;
++  hasVariations: boolean;
++  onShowVariations: () => void;
++  onEdit: () => void;
++};
++
++export function OptionsMenu({
++  stepId,
++  stepName,
++  origin,
++  hasVariations,
++  onShowVariations,
++  onEdit,
++}: OptionsMenuProps) {
++  const [isOpen, setIsOpen] = useState(false);
++  const rootRef = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    if (!isOpen) {
++      return;
++    }
++
++    function handleClick(event: MouseEvent) {
++      if (!rootRef.current?.contains(event.target as Node)) {
++        setIsOpen(false);
++      }
++    }
++
++    document.addEventListener("click", handleClick);
++
++    return () => document.removeEventListener("click", handleClick);
++  }, [isOpen]);
++
++  async function copyLink() {
++    const base =
++      origin ?? (typeof window === "undefined" ? "" : window.location.origin);
++    const href = `${base}/s/${stepId}`;
++
++    await globalThis.navigator.clipboard?.writeText(href);
++    setIsOpen(false);
++  }
++
++  return (
++    <div ref={rootRef} className="relative">
++      <button
++        type="button"
++        aria-expanded={isOpen}
++        aria-label={`Open options for ${stepName}`}
++        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++        onClick={() => setIsOpen((current) => !current)}
++      >
++        <MoreHorizontal size={18} aria-hidden="true" />
++      </button>
++
++      {isOpen ? (
++        <div
++          role="menu"
++          aria-label={`Options for ${stepName}`}
++          className="absolute right-0 z-20 mt-2 w-52 rounded-md border border-[var(--border)] bg-white p-1 shadow-lg"
++        >
++          <MenuItem
++            icon={<Copy size={16} />}
++            label="Copy link"
++            onClick={copyLink}
++          />
++          {hasVariations ? (
++            <MenuItem
++              icon={<Shapes size={16} />}
++              label="Show variations"
++              onClick={() => {
++                setIsOpen(false);
++                onShowVariations();
++              }}
++            />
++          ) : null}
++          <MenuItem
++            icon={<Pencil size={16} />}
++            label="Edit"
++            onClick={() => {
++              setIsOpen(false);
++              onEdit();
++            }}
++          />
++          <MenuItem
++            icon={<X size={16} />}
++            label="Cancel"
++            onClick={() => setIsOpen(false)}
++          />
++        </div>
++      ) : null}
++    </div>
++  );
++}
++
++type MenuItemProps = {
++  icon: React.ReactNode;
++  label: string;
++  onClick: () => void | Promise<void>;
++};
++
++function MenuItem({ icon, label, onClick }: MenuItemProps) {
++  return (
++    <button
++      type="button"
++      role="menuitem"
++      className="flex h-10 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-[var(--muted)]"
++      onClick={onClick}
++    >
++      {icon}
++      {label}
++    </button>
++  );
++}
+diff --git a/components/feed/step-actions.tsx b/components/feed/step-actions.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f18a14093f0d768dbeb146eb27079369b78db449
+--- /dev/null
++++ b/components/feed/step-actions.tsx
+@@ -0,0 +1,40 @@
++"use client";
++
++import { useMutation } from "convex/react";
++import { Dumbbell } from "lucide-react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { startOfLocalDay } from "@/lib/domain/dates";
++
++type StepActionsProps = {
++  stepId: string;
++  stepName: string;
++};
++
++export function StepActions({ stepId, stepName }: StepActionsProps) {
++  const recordPractice = useMutation(api.steps.recordPractice);
++
++  async function handlePractice() {
++    const now = Date.now();
++
++    await recordPractice({
++      id: stepId as Id<"steps">,
++      record: {
++        date: now,
++        startOfDay: startOfLocalDay(now),
++      },
++    });
++  }
++
++  return (
++    <button
++      type="button"
++      className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
++      aria-label={`Practice ${stepName}`}
++      onClick={handlePractice}
++    >
++      <Dumbbell size={16} aria-hidden="true" />
++      Practice
++    </button>
++  );
++}
+diff --git a/components/feed/steps-feed.tsx b/components/feed/steps-feed.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..849f0866a815e6c3372b00acf8bca777b61bdabf
+--- /dev/null
++++ b/components/feed/steps-feed.tsx
+@@ -0,0 +1,212 @@
++"use client";
++
++import { useEffect, useMemo, useRef, useState } from "react";
++import { SearchButton } from "@/components/search/search-button";
++import { SearchOverlay } from "@/components/search/search-overlay";
++import { VariationFeedModal } from "@/components/steps/variation-feed-modal";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { querySearch } from "@/lib/search/query-search";
++import { DEFAULT_SEARCH_STATE, type SearchState } from "@/lib/search/types";
++import { FeedStepCard } from "./feed-step-card";
++
++const estimatedCardHeight = 760;
++const overscan = 3;
++
++type StepsFeedProps = {
++  steps: Doc<"steps">[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  origin?: string;
++  onEditStep: (stepId: string) => void;
++};
++
++function isDefaultSearch(state: SearchState) {
++  return (
++    state.query.trim() === "" &&
++    Object.keys(state.feeling).length === 0 &&
++    state.includeAllTags.length === 0 &&
++    state.excludeAnyTags.length === 0 &&
++    state.anyArtists.length === 0 &&
++    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
++    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
++  );
++}
++
++function uniqueSorted(values: string[]) {
++  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
++}
++
++function useVirtualWindow(count: number) {
++  const [range, setRange] = useState({ start: 0, end: 12 });
++
++  useEffect(() => {
++    function updateRange() {
++      const viewportHeight =
++        typeof window === "undefined" ? 900 : window.innerHeight;
++      const scrollTop = typeof window === "undefined" ? 0 : window.scrollY;
++      const start = Math.max(
++        0,
++        Math.floor(scrollTop / estimatedCardHeight) - overscan,
++      );
++      const visible =
++        Math.ceil(viewportHeight / estimatedCardHeight) + overscan * 2;
++
++      setRange({
++        start,
++        end: Math.min(count, start + visible),
++      });
++    }
++
++    updateRange();
++    window.addEventListener("scroll", updateRange, { passive: true });
++    window.addEventListener("resize", updateRange);
++
++    return () => {
++      window.removeEventListener("scroll", updateRange);
++      window.removeEventListener("resize", updateRange);
++    };
++  }, [count]);
++
++  return range;
++}
++
++export function StepsFeed({
++  steps,
++  tagOptions,
++  artistOptions,
++  origin,
++  onEditStep,
++}: StepsFeedProps) {
++  const [searchState, setSearchState] =
++    useState<SearchState>(DEFAULT_SEARCH_STATE);
++  const [isSearchOpen, setIsSearchOpen] = useState(false);
++  const [variationSource, setVariationSource] = useState<Doc<"steps"> | null>(
++    null,
++  );
++  const hasMounted = useRef(false);
++  const searchResults = useMemo(
++    () => querySearch(steps, searchState),
++    [steps, searchState],
++  );
++  const visibleSteps = searchResults.map((result) => result.step);
++  const { start, end } = useVirtualWindow(visibleSteps.length);
++  const renderedSteps = visibleSteps.slice(start, end);
++  const derivedOptions = useMemo(
++    () => ({
++      tags: uniqueSorted(
++        steps.flatMap((step) => [...step.tags, ...step.smartTags]),
++      ),
++      artists: uniqueSorted(steps.flatMap((step) => step.artists)),
++    }),
++    [steps],
++  );
++  const searchIsActive = !isDefaultSearch(searchState);
++  const variationSteps = useMemo(() => {
++    if (!variationSource || variationSource.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (step) =>
++        step._id !== variationSource._id &&
++        step.variationKey === variationSource.variationKey,
++    );
++  }, [steps, variationSource]);
++
++  useEffect(() => {
++    if (!hasMounted.current) {
++      hasMounted.current = true;
++      return;
++    }
++
++    window.scrollTo({ top: 0, behavior: "smooth" });
++  }, [searchState]);
++
++  function relatedStepsFor(step: Doc<"steps">) {
++    if (step.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (candidate) =>
++        candidate._id !== step._id &&
++        candidate.variationKey === step.variationKey,
++    );
++  }
++
++  return (
++    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
++      <div className="flex flex-wrap items-start justify-between gap-4">
++        <div>
++          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
++            Steps
++          </p>
++          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
++        </div>
++        <SearchButton
++          isActive={searchIsActive}
++          matchedCount={searchResults.length}
++          onClick={() => setIsSearchOpen(true)}
++        />
++      </div>
++
++      {steps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No steps yet.
++        </p>
++      ) : visibleSteps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No matching steps.
++        </p>
++      ) : (
++        <div
++          style={{
++            height: visibleSteps.length * estimatedCardHeight,
++            position: "relative",
++          }}
++        >
++          <ul
++            className="absolute left-0 right-0 flex flex-col gap-4"
++            style={{
++              transform: `translateY(${start * estimatedCardHeight}px)`,
++            }}
++          >
++            {renderedSteps.map((step) => (
++              <li
++                key={step._id}
++                style={{ minHeight: estimatedCardHeight - 16 }}
++              >
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={relatedStepsFor(step)}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={setVariationSource}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      )}
++
++      <SearchOverlay
++        isOpen={isSearchOpen}
++        value={searchState}
++        matchedCount={searchResults.length}
++        tagOptions={tagOptions ?? derivedOptions.tags}
++        artistOptions={artistOptions ?? derivedOptions.artists}
++        onChange={setSearchState}
++        onClose={() => setIsSearchOpen(false)}
++      />
++      <VariationFeedModal
++        sourceStep={variationSource}
++        steps={variationSteps}
++        origin={origin}
++        isOpen={variationSource !== null}
++        onClose={() => setVariationSource(null)}
++        onEditStep={onEditStep}
++      />
++    </main>
++  );
++}
+diff --git a/components/steps/feed-step-list.tsx b/components/steps/feed-step-list.tsx
+index d0df55c710949e820cfa8fd2e4e583815edadc20..ed98842ff77d9de1d7950bb968b01139c41e7f20
+--- a/components/steps/feed-step-list.tsx
++++ b/components/steps/feed-step-list.tsx
+@@ -1,42 +1,14 @@
+ "use client";
+ 
+ import { useQuery } from "convex/react";
+-import { MoreHorizontal, Pencil } from "lucide-react";
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import { SearchButton } from "@/components/search/search-button";
+-import { SearchOverlay } from "@/components/search/search-overlay";
+ import { InlineStepEditModal } from "@/components/steps/inline-step-edit-modal";
+ import { useInlineStepEdit } from "@/components/steps/use-inline-step-edit";
++import { StepsFeed } from "@/components/feed/steps-feed";
+ import { api } from "@/convex/_generated/api";
+-import { querySearch } from "@/lib/search/query-search";
+-import {
+-  DEFAULT_SEARCH_STATE,
+-  type SearchState,
+-} from "@/lib/search/types";
+-
+-function isDefaultSearch(state: SearchState) {
+-  return (
+-    state.query.trim() === "" &&
+-    Object.keys(state.feeling).length === 0 &&
+-    state.includeAllTags.length === 0 &&
+-    state.excludeAnyTags.length === 0 &&
+-    state.anyArtists.length === 0 &&
+-    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
+-    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
+-  );
+-}
+-
+-function uniqueSorted(values: string[]) {
+-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+-}
+ 
+ export function FeedStepList() {
+   const steps = useQuery(api.steps.listMySteps);
+   const existing = useQuery(api.steps.getExistingTagsAndArtists);
+-  const [searchState, setSearchState] =
+-    useState<SearchState>(DEFAULT_SEARCH_STATE);
+-  const [isSearchOpen, setIsSearchOpen] = useState(false);
+-  const hasMounted = useRef(false);
+   const {
+     editingStepId,
+     isInlineStepEditOpen,
+@@ -44,120 +16,29 @@
+     closeInlineStepEdit,
+   } = useInlineStepEdit();
+ 
+-  const searchResults = useMemo(
+-    () => querySearch(steps ?? [], searchState),
+-    [steps, searchState],
+-  );
+-  const optionSource = useMemo(
+-    () => ({
+-      tags: uniqueSorted(
+-        steps?.flatMap((step) => [...step.tags, ...step.smartTags]) ?? [],
+-      ),
+-      artists: uniqueSorted(steps?.flatMap((step) => step.artists) ?? []),
+-    }),
+-    [steps],
+-  );
+-  const visibleSteps = searchResults.map((result) => result.step);
+-  const searchIsActive = !isDefaultSearch(searchState);
+-
+-  useEffect(() => {
+-    if (!hasMounted.current) {
+-      hasMounted.current = true;
+-      return;
+-    }
+-
+-    window.scrollTo({ top: 0, behavior: "smooth" });
+-  }, [searchState]);
+-
+-  return (
+-    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+-      <div className="flex flex-wrap items-start justify-between gap-4">
+-        <div>
+-          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
+-            Steps
+-          </p>
+-          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
+-        </div>
+-        {steps === undefined ? null : (
+-          <SearchButton
+-            isActive={searchIsActive}
+-            matchedCount={searchResults.length}
+-            onClick={() => setIsSearchOpen(true)}
+-          />
+-        )}
+-      </div>
+-
+-      {steps === undefined ? (
++  if (steps === undefined) {
++    return (
++      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+         <p className="rounded-md border border-[var(--border)] bg-white px-4 py-5 text-sm text-[var(--muted-foreground)]">
+           Loading steps...
+-        </p>
+-      ) : steps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No steps yet.
+-        </p>
+-      ) : visibleSteps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No matching steps.
+         </p>
+-      ) : (
+-        <ul className="flex flex-col gap-3">
+-          {visibleSteps.map((step) => (
+-            <li
+-              key={step._id}
+-              className="rounded-md border border-[var(--border)] bg-white p-4 shadow-sm"
+-            >
+-              <div className="flex items-start justify-between gap-4">
+-                <div className="min-w-0">
+-                  <h2 className="truncate text-lg font-semibold">
+-                    {step.name}
+-                  </h2>
+-                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+-                    #{step.identifier} · {step.kind} · difficulty{" "}
+-                    {step.difficulty}
+-                  </p>
+-                  <div className="mt-3 flex flex-wrap gap-1.5">
+-                    {[...step.feeling, ...step.tags, ...step.smartTags]
+-                      .slice(0, 8)
+-                      .map((tag) => (
+-                        <span
+-                          key={tag}
+-                          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs"
+-                        >
+-                          {tag}
+-                        </span>
+-                      ))}
+-                  </div>
+-                </div>
+-                <button
+-                  type="button"
+-                  aria-label={`Edit ${step.name}`}
+-                  className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
+-                  onClick={() => openInlineStepEdit(step._id)}
+-                >
+-                  <MoreHorizontal size={16} aria-hidden="true" />
+-                  <Pencil size={16} aria-hidden="true" />
+-                  Edit
+-                </button>
+-              </div>
+-            </li>
+-          ))}
+-        </ul>
+-      )}
++      </main>
++    );
++  }
+ 
+-      <SearchOverlay
+-        isOpen={isSearchOpen}
+-        value={searchState}
+-        matchedCount={searchResults.length}
+-        tagOptions={existing?.tags ?? optionSource.tags}
+-        artistOptions={existing?.artists ?? optionSource.artists}
+-        onChange={setSearchState}
+-        onClose={() => setIsSearchOpen(false)}
++  return (
++    <>
++      <StepsFeed
++        steps={steps}
++        tagOptions={existing?.tags}
++        artistOptions={existing?.artists}
++        onEditStep={openInlineStepEdit}
+       />
+       <InlineStepEditModal
+         stepId={editingStepId}
+         isOpen={isInlineStepEditOpen}
+         onClose={closeInlineStepEdit}
+       />
+-    </main>
++    </>
+   );
+ }
+diff --git a/components/steps/step-tags.tsx b/components/steps/step-tags.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c52ea4636a682765b65ae77659d7a6659ab18f6
+--- /dev/null
++++ b/components/steps/step-tags.tsx
+@@ -0,0 +1,27 @@
++type StepTagsProps = {
++  values: string[];
++  limit?: number;
++};
++
++export function StepTags({ values, limit = 12 }: StepTagsProps) {
++  const unique = [
++    ...new Set(values.filter((value) => value.trim().length > 0)),
++  ];
++
++  if (unique.length === 0) {
++    return null;
++  }
++
++  return (
++    <ul className="flex flex-wrap gap-1.5" aria-label="Step tags">
++      {unique.slice(0, limit).map((tag) => (
++        <li
++          key={tag}
++          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs text-[var(--foreground)]"
++        >
++          {tag}
++        </li>
++      ))}
++    </ul>
++  );
++}
+diff --git a/components/steps/variation-feed-modal.tsx b/components/steps/variation-feed-modal.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b4bb041fa762bebedc0d4e97908a85870803526
+--- /dev/null
++++ b/components/steps/variation-feed-modal.tsx
+@@ -0,0 +1,74 @@
++"use client";
++
++import { X } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { FeedStepCard } from "@/components/feed/feed-step-card";
++
++type VariationFeedModalProps = {
++  sourceStep: Doc<"steps"> | null;
++  steps: Doc<"steps">[];
++  isOpen: boolean;
++  origin?: string;
++  onClose: () => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function VariationFeedModal({
++  sourceStep,
++  steps,
++  isOpen,
++  origin,
++  onClose,
++  onEditStep,
++}: VariationFeedModalProps) {
++  if (!isOpen || !sourceStep) {
++    return null;
++  }
++
++  return (
++    <div className="fixed inset-0 z-40 flex bg-black/45 p-0 sm:p-6">
++      <button
++        type="button"
++        aria-label="Close variations backdrop"
++        className="absolute inset-0 h-full w-full cursor-default"
++        onClick={onClose}
++      />
++      <section
++        role="dialog"
++        aria-modal="true"
++        aria-labelledby="variation-feed-title"
++        className="relative flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:rounded-lg"
++      >
++        <header className="flex min-h-16 items-center justify-between border-[var(--border)] border-b px-4 sm:px-6">
++          <h2 id="variation-feed-title" className="text-lg font-semibold">
++            Variations for {sourceStep.name}
++          </h2>
++          <button
++            type="button"
++            aria-label="Close variations"
++            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++            onClick={onClose}
++          >
++            <X size={18} aria-hidden="true" />
++          </button>
++        </header>
++        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
++          <ul className="flex flex-col gap-4">
++            {steps.map((step) => (
++              <li key={step._id}>
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={[]}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={() => undefined}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      </section>
++    </div>
++  );
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/feed.test.tsx b/tests/components/feed.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7c4338132b27f188212056cb205571e240303e0
+--- /dev/null
++++ b/tests/components/feed.test.tsx
+@@ -0,0 +1,168 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { StepsFeed } from "@/components/feed/steps-feed";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++
++const mocks = vi.hoisted(() => ({
++  recordPractice: vi.fn(),
++  recordStepView: vi.fn(),
++  openEdit: vi.fn(),
++  clipboardWriteText: vi.fn(),
++}));
++
++function stepId(value: string) {
++  return value as Id<"steps">;
++}
++
++function step(overrides: Partial<Doc<"steps">> = {}): Doc<"steps"> {
++  const identifier = (overrides.identifier as number | undefined) ?? 1;
++
++  return {
++    _id: `step-${identifier}` as Id<"steps">,
++    _creationTime: 100 + identifier,
++    ownerId: "user",
++    identifier,
++    name: `Step ${identifier}`,
++    videos: [
++      {
++        hash: `hash-${identifier}`,
++        storageKey: `/videos/${identifier}.mp4`,
++        snapshotStorageKey: `/snapshots/${identifier}.jpg`,
++        width: 1080,
++        height: 1920,
++      },
++    ],
++    videoHashes: [`hash-${identifier}`],
++    difficulty: 3,
++    feeling: ["urban"],
++    kind: "step",
++    tags: ["turn"],
++    artists: ["Petchu"],
++    notes: "",
++    smartTags: ["Shadow position"],
++    removedSmartTags: [],
++    tokens: ["shadow", "turn", "shadow|turn"],
++    variationKey: "group-main",
++    practiceRecords: [],
++    viewRecords: [],
++    createdAt: 100 + identifier,
++    updatedAt: 100 + identifier,
++    ...overrides,
++  };
++}
++
++vi.mock("convex/react", () => ({
++  useMutation: () => mocks.recordPractice,
++}));
++
++describe("StepsFeed", () => {
++  beforeEach(() => {
++    mocks.recordPractice.mockReset();
++    mocks.recordPractice.mockResolvedValue("step-1");
++    mocks.recordStepView.mockReset();
++    mocks.recordStepView.mockResolvedValue("step-1");
++    mocks.openEdit.mockReset();
++    mocks.clipboardWriteText.mockReset();
++    vi.spyOn(window, "innerHeight", "get").mockReturnValue(900);
++    vi.spyOn(window, "scrollY", "get").mockReturnValue(0);
++  });
++
++  it("renders a virtualized feed with stable capped video sizing", () => {
++    const steps = Array.from({ length: 60 }, (_, index) =>
++      step({ identifier: index + 1, _id: stepId(`step-${index + 1}`) }),
++    );
++
++    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
++
++    expect(screen.getByText("Step 60")).toBeVisible();
++    expect(screen.queryByText("Step 1")).not.toBeInTheDocument();
++    const videoFrame = screen.getByTestId("feed-video-frame-step-60");
++    expect(videoFrame).toHaveStyle({
++      aspectRatio: "1080 / 1920",
++      maxHeight: "60vh",
++    });
++  });
++
++  it("shows tags, variations, practice, copy link, and edit actions", async () => {
++    const user = userEvent.setup();
++    vi.spyOn(globalThis.navigator.clipboard, "writeText").mockImplementation(
++      mocks.clipboardWriteText,
++    );
++    const steps = [
++      step({ _id: stepId("step-main"), identifier: 1, name: "Shadow turn" }),
++      step({
++        _id: stepId("step-variation"),
++        identifier: 2,
++        name: "Shadow exit",
++      }),
++      step({
++        _id: stepId("step-other"),
++        identifier: 3,
++        name: "Saida",
++        variationKey: "group-other",
++      }),
++    ];
++
++    render(
++      <StepsFeed
++        steps={steps}
++        origin="https://steps.test"
++        onEditStep={mocks.openEdit}
++      />,
++    );
++
++    const card = screen.getByRole("article", { name: "Shadow turn" });
++    expect(within(card).getByText("turn")).toBeVisible();
++    expect(within(card).getByText("Shadow position")).toBeVisible();
++
++    await user.click(
++      within(card).getByRole("button", { name: "Show 1 variation" }),
++    );
++    const modal = screen.getByRole("dialog", {
++      name: "Variations for Shadow turn",
++    });
++    expect(within(modal).getByText("Shadow exit")).toBeVisible();
++    expect(within(modal).queryByText("Saida")).not.toBeInTheDocument();
++
++    await user.click(
++      within(modal).getByRole("button", { name: "Close variations" }),
++    );
++    const refreshedCard = screen.getByRole("article", { name: "Shadow turn" });
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Practice Shadow turn",
++      }),
++    );
++    await waitFor(() =>
++      expect(mocks.recordPractice).toHaveBeenCalledWith({
++        id: "step-main",
++        record: expect.objectContaining({
++          date: expect.any(Number),
++          startOfDay: expect.any(Number),
++        }),
++      }),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    const menu = screen.getByRole("menu", { name: "Options for Shadow turn" });
++    await user.click(within(menu).getByRole("menuitem", { name: "Copy link" }));
++    await waitFor(() =>
++      expect(mocks.clipboardWriteText).toHaveBeenCalledWith(
++        "https://steps.test/s/step-main",
++      ),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
++    expect(mocks.openEdit).toHaveBeenCalledWith("step-main");
++  });
++});
+
+ succeeded in 2355ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 135 files in 26ms. No fixes applied.
+[feat/feed-search-and-practice e0f7d50] chore(ralph): record feed progress
+ 3 files changed, 19920 insertions(+)
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index d66213ad36f5210b0876a4a7f718fc96709c9ec1..5ca3d0edce9182883f2dd8b5e8f86c5a07f73bd0
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -427,3 +427,39 @@
+   - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
+   - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
+ ---
++
++## [2026-05-07 22:23:20 CEST] - S05-03-build-virtualized-feed-and-step-actions: Build Virtualized Feed And Step Actions
++Thread:
++Run: 20260507-215557-6595 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 0c6a6e7 feat(feed): add virtualized step feed
++- Post-commit status: `.ralph/runs/run-20260507-215557-6595-iter-3.log` modified by active run logging before progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; feed workflow verified by component tests
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - components/feed/feed-step-card.tsx
++  - components/feed/options-menu.tsx
++  - components/feed/step-actions.tsx
++  - components/feed/steps-feed.tsx
++  - components/steps/feed-step-list.tsx
++  - components/steps/step-tags.tsx
++  - components/steps/variation-feed-modal.tsx
++  - tests/components/feed.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-3.log
++- What was implemented
++  Main `/feed` now queries owned steps through the existing wrapper, applies search/filter/sort, renders a virtualized card feed, sizes primary videos from stored dimensions with a `60vh` cap, mounts visible videos only, displays tags, variation counts, practice action, options menu, copy link, and inline edit entry. Variation overlay shows same-key related steps only.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep `FeedStepList` as the Convex/auth wrapper and put testable feed behavior in `components/feed/steps-feed.tsx`.
++  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
++  - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
++---
+diff --git a/components/feed/feed-step-card.tsx b/components/feed/feed-step-card.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c853a0c259d5922714b402480e1423f7236c21e1
+--- /dev/null
++++ b/components/feed/feed-step-card.tsx
+@@ -0,0 +1,117 @@
++"use client";
++
++import { Pencil, Shapes } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { StepTags } from "@/components/steps/step-tags";
++import { VideoPlayer } from "@/components/video/video-player";
++import { OptionsMenu } from "./options-menu";
++import { StepActions } from "./step-actions";
++
++type FeedStepCardProps = {
++  step: Doc<"steps">;
++  relatedSteps: Doc<"steps">[];
++  isVisible: boolean;
++  origin?: string;
++  onShowVariations: (step: Doc<"steps">) => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function FeedStepCard({
++  step,
++  relatedSteps,
++  isVisible,
++  origin,
++  onShowVariations,
++  onEditStep,
++}: FeedStepCardProps) {
++  const primaryVideo = step.videos[0];
++  const hasVariations = relatedSteps.length > 0;
++  const tags = [
++    step.kind,
++    `difficulty ${step.difficulty}`,
++    ...step.feeling,
++    ...step.tags,
++    ...step.smartTags,
++    ...step.artists,
++  ];
++
++  return (
++    <article
++      aria-label={step.name}
++      className="overflow-hidden rounded-md border border-[var(--border)] bg-white shadow-sm"
++    >
++      {primaryVideo ? (
++        <div
++          data-testid={`feed-video-frame-${step._id}`}
++          className="w-full overflow-hidden bg-black"
++          style={{
++            aspectRatio:
++              primaryVideo.width && primaryVideo.height
++                ? `${primaryVideo.width} / ${primaryVideo.height}`
++                : "16 / 9",
++            maxHeight: "60vh",
++          }}
++        >
++          {isVisible ? (
++            <VideoPlayer
++              videoUrl={primaryVideo.storageKey}
++              snapshotUrl={primaryVideo.snapshotStorageKey}
++              width={primaryVideo.width}
++              height={primaryVideo.height}
++              autoPlay={typeof IntersectionObserver !== "undefined"}
++              enableFullSize
++              ariaLabel={`${step.name} video`}
++            />
++          ) : null}
++        </div>
++      ) : null}
++
++      <div className="flex flex-col gap-4 p-4">
++        <div className="flex items-start justify-between gap-4">
++          <div className="min-w-0">
++            <h2 className="truncate text-xl font-semibold">{step.name}</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              #{step.identifier}
++            </p>
++          </div>
++          <OptionsMenu
++            stepId={step._id}
++            stepName={step.name}
++            origin={origin}
++            hasVariations={hasVariations}
++            onShowVariations={() => onShowVariations(step)}
++            onEdit={() => onEditStep(step._id)}
++          />
++        </div>
++
++        <StepTags values={tags} />
++
++        <div className="flex flex-wrap items-center gap-2">
++          {hasVariations ? (
++            <button
++              type="button"
++              className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++              aria-label={`Show ${relatedSteps.length} ${
++                relatedSteps.length === 1 ? "variation" : "variations"
++              }`}
++              onClick={() => onShowVariations(step)}
++            >
++              <Shapes size={16} aria-hidden="true" />
++              {relatedSteps.length}
++            </button>
++          ) : null}
++          <StepActions stepId={step._id} stepName={step.name} />
++          <button
++            type="button"
++            aria-label={`Edit ${step.name}`}
++            className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++            onClick={() => onEditStep(step._id)}
++          >
++            <Pencil size={16} aria-hidden="true" />
++            Edit
++          </button>
++        </div>
++      </div>
++    </article>
++  );
++}
+diff --git a/components/feed/options-menu.tsx b/components/feed/options-menu.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d519dbe5832490060595b3b1f74eff12508cf85
+--- /dev/null
++++ b/components/feed/options-menu.tsx
+@@ -0,0 +1,121 @@
++"use client";
++
++import { Copy, MoreHorizontal, Pencil, Shapes, X } from "lucide-react";
++import { useEffect, useRef, useState } from "react";
++
++type OptionsMenuProps = {
++  stepId: string;
++  stepName: string;
++  origin?: string;
++  hasVariations: boolean;
++  onShowVariations: () => void;
++  onEdit: () => void;
++};
++
++export function OptionsMenu({
++  stepId,
++  stepName,
++  origin,
++  hasVariations,
++  onShowVariations,
++  onEdit,
++}: OptionsMenuProps) {
++  const [isOpen, setIsOpen] = useState(false);
++  const rootRef = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    if (!isOpen) {
++      return;
++    }
++
++    function handleClick(event: MouseEvent) {
++      if (!rootRef.current?.contains(event.target as Node)) {
++        setIsOpen(false);
++      }
++    }
++
++    document.addEventListener("click", handleClick);
++
++    return () => document.removeEventListener("click", handleClick);
++  }, [isOpen]);
++
++  async function copyLink() {
++    const base =
++      origin ?? (typeof window === "undefined" ? "" : window.location.origin);
++    const href = `${base}/s/${stepId}`;
++
++    await globalThis.navigator.clipboard?.writeText(href);
++    setIsOpen(false);
++  }
++
++  return (
++    <div ref={rootRef} className="relative">
++      <button
++        type="button"
++        aria-expanded={isOpen}
++        aria-label={`Open options for ${stepName}`}
++        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++        onClick={() => setIsOpen((current) => !current)}
++      >
++        <MoreHorizontal size={18} aria-hidden="true" />
++      </button>
++
++      {isOpen ? (
++        <div
++          role="menu"
++          aria-label={`Options for ${stepName}`}
++          className="absolute right-0 z-20 mt-2 w-52 rounded-md border border-[var(--border)] bg-white p-1 shadow-lg"
++        >
++          <MenuItem
++            icon={<Copy size={16} />}
++            label="Copy link"
++            onClick={copyLink}
++          />
++          {hasVariations ? (
++            <MenuItem
++              icon={<Shapes size={16} />}
++              label="Show variations"
++              onClick={() => {
++                setIsOpen(false);
++                onShowVariations();
++              }}
++            />
++          ) : null}
++          <MenuItem
++            icon={<Pencil size={16} />}
++            label="Edit"
++            onClick={() => {
++              setIsOpen(false);
++              onEdit();
++            }}
++          />
++          <MenuItem
++            icon={<X size={16} />}
++            label="Cancel"
++            onClick={() => setIsOpen(false)}
++          />
++        </div>
++      ) : null}
++    </div>
++  );
++}
++
++type MenuItemProps = {
++  icon: React.ReactNode;
++  label: string;
++  onClick: () => void | Promise<void>;
++};
++
++function MenuItem({ icon, label, onClick }: MenuItemProps) {
++  return (
++    <button
++      type="button"
++      role="menuitem"
++      className="flex h-10 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-[var(--muted)]"
++      onClick={onClick}
++    >
++      {icon}
++      {label}
++    </button>
++  );
++}
+diff --git a/components/feed/step-actions.tsx b/components/feed/step-actions.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f18a14093f0d768dbeb146eb27079369b78db449
+--- /dev/null
++++ b/components/feed/step-actions.tsx
+@@ -0,0 +1,40 @@
++"use client";
++
++import { useMutation } from "convex/react";
++import { Dumbbell } from "lucide-react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { startOfLocalDay } from "@/lib/domain/dates";
++
++type StepActionsProps = {
++  stepId: string;
++  stepName: string;
++};
++
++export function StepActions({ stepId, stepName }: StepActionsProps) {
++  const recordPractice = useMutation(api.steps.recordPractice);
++
++  async function handlePractice() {
++    const now = Date.now();
++
++    await recordPractice({
++      id: stepId as Id<"steps">,
++      record: {
++        date: now,
++        startOfDay: startOfLocalDay(now),
++      },
++    });
++  }
++
++  return (
++    <button
++      type="button"
++      className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
++      aria-label={`Practice ${stepName}`}
++      onClick={handlePractice}
++    >
++      <Dumbbell size={16} aria-hidden="true" />
++      Practice
++    </button>
++  );
++}
+diff --git a/components/feed/steps-feed.tsx b/components/feed/steps-feed.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..849f0866a815e6c3372b00acf8bca777b61bdabf
+--- /dev/null
++++ b/components/feed/steps-feed.tsx
+@@ -0,0 +1,212 @@
++"use client";
++
++import { useEffect, useMemo, useRef, useState } from "react";
++import { SearchButton } from "@/components/search/search-button";
++import { SearchOverlay } from "@/components/search/search-overlay";
++import { VariationFeedModal } from "@/components/steps/variation-feed-modal";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { querySearch } from "@/lib/search/query-search";
++import { DEFAULT_SEARCH_STATE, type SearchState } from "@/lib/search/types";
++import { FeedStepCard } from "./feed-step-card";
++
++const estimatedCardHeight = 760;
++const overscan = 3;
++
++type StepsFeedProps = {
++  steps: Doc<"steps">[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  origin?: string;
++  onEditStep: (stepId: string) => void;
++};
++
++function isDefaultSearch(state: SearchState) {
++  return (
++    state.query.trim() === "" &&
++    Object.keys(state.feeling).length === 0 &&
++    state.includeAllTags.length === 0 &&
++    state.excludeAnyTags.length === 0 &&
++    state.anyArtists.length === 0 &&
++    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
++    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
++  );
++}
++
++function uniqueSorted(values: string[]) {
++  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
++}
++
++function useVirtualWindow(count: number) {
++  const [range, setRange] = useState({ start: 0, end: 12 });
++
++  useEffect(() => {
++    function updateRange() {
++      const viewportHeight =
++        typeof window === "undefined" ? 900 : window.innerHeight;
++      const scrollTop = typeof window === "undefined" ? 0 : window.scrollY;
++      const start = Math.max(
++        0,
++        Math.floor(scrollTop / estimatedCardHeight) - overscan,
++      );
++      const visible =
++        Math.ceil(viewportHeight / estimatedCardHeight) + overscan * 2;
++
++      setRange({
++        start,
++        end: Math.min(count, start + visible),
++      });
++    }
++
++    updateRange();
++    window.addEventListener("scroll", updateRange, { passive: true });
++    window.addEventListener("resize", updateRange);
++
++    return () => {
++      window.removeEventListener("scroll", updateRange);
++      window.removeEventListener("resize", updateRange);
++    };
++  }, [count]);
++
++  return range;
++}
++
++export function StepsFeed({
++  steps,
++  tagOptions,
++  artistOptions,
++  origin,
++  onEditStep,
++}: StepsFeedProps) {
++  const [searchState, setSearchState] =
++    useState<SearchState>(DEFAULT_SEARCH_STATE);
++  const [isSearchOpen, setIsSearchOpen] = useState(false);
++  const [variationSource, setVariationSource] = useState<Doc<"steps"> | null>(
++    null,
++  );
++  const hasMounted = useRef(false);
++  const searchResults = useMemo(
++    () => querySearch(steps, searchState),
++    [steps, searchState],
++  );
++  const visibleSteps = searchResults.map((result) => result.step);
++  const { start, end } = useVirtualWindow(visibleSteps.length);
++  const renderedSteps = visibleSteps.slice(start, end);
++  const derivedOptions = useMemo(
++    () => ({
++      tags: uniqueSorted(
++        steps.flatMap((step) => [...step.tags, ...step.smartTags]),
++      ),
++      artists: uniqueSorted(steps.flatMap((step) => step.artists)),
++    }),
++    [steps],
++  );
++  const searchIsActive = !isDefaultSearch(searchState);
++  const variationSteps = useMemo(() => {
++    if (!variationSource || variationSource.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (step) =>
++        step._id !== variationSource._id &&
++        step.variationKey === variationSource.variationKey,
++    );
++  }, [steps, variationSource]);
++
++  useEffect(() => {
++    if (!hasMounted.current) {
++      hasMounted.current = true;
++      return;
++    }
++
++    window.scrollTo({ top: 0, behavior: "smooth" });
++  }, [searchState]);
++
++  function relatedStepsFor(step: Doc<"steps">) {
++    if (step.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (candidate) =>
++        candidate._id !== step._id &&
++        candidate.variationKey === step.variationKey,
++    );
++  }
++
++  return (
++    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
++      <div className="flex flex-wrap items-start justify-between gap-4">
++        <div>
++          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
++            Steps
++          </p>
++          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
++        </div>
++        <SearchButton
++          isActive={searchIsActive}
++          matchedCount={searchResults.length}
++          onClick={() => setIsSearchOpen(true)}
++        />
++      </div>
++
++      {steps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No steps yet.
++        </p>
++      ) : visibleSteps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No matching steps.
++        </p>
++      ) : (
++        <div
++          style={{
++            height: visibleSteps.length * estimatedCardHeight,
++            position: "relative",
++          }}
++        >
++          <ul
++            className="absolute left-0 right-0 flex flex-col gap-4"
++            style={{
++              transform: `translateY(${start * estimatedCardHeight}px)`,
++            }}
++          >
++            {renderedSteps.map((step) => (
++              <li
++                key={step._id}
++                style={{ minHeight: estimatedCardHeight - 16 }}
++              >
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={relatedStepsFor(step)}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={setVariationSource}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      )}
++
++      <SearchOverlay
++        isOpen={isSearchOpen}
++        value={searchState}
++        matchedCount={searchResults.length}
++        tagOptions={tagOptions ?? derivedOptions.tags}
++        artistOptions={artistOptions ?? derivedOptions.artists}
++        onChange={setSearchState}
++        onClose={() => setIsSearchOpen(false)}
++      />
++      <VariationFeedModal
++        sourceStep={variationSource}
++        steps={variationSteps}
++        origin={origin}
++        isOpen={variationSource !== null}
++        onClose={() => setVariationSource(null)}
++        onEditStep={onEditStep}
++      />
++    </main>
++  );
++}
+diff --git a/components/steps/feed-step-list.tsx b/components/steps/feed-step-list.tsx
+index d0df55c710949e820cfa8fd2e4e583815edadc20..ed98842ff77d9de1d7950bb968b01139c41e7f20
+--- a/components/steps/feed-step-list.tsx
++++ b/components/steps/feed-step-list.tsx
+@@ -1,42 +1,14 @@
+ "use client";
+ 
+ import { useQuery } from "convex/react";
+-import { MoreHorizontal, Pencil } from "lucide-react";
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import { SearchButton } from "@/components/search/search-button";
+-import { SearchOverlay } from "@/components/search/search-overlay";
+ import { InlineStepEditModal } from "@/components/steps/inline-step-edit-modal";
+ import { useInlineStepEdit } from "@/components/steps/use-inline-step-edit";
++import { StepsFeed } from "@/components/feed/steps-feed";
+ import { api } from "@/convex/_generated/api";
+-import { querySearch } from "@/lib/search/query-search";
+-import {
+-  DEFAULT_SEARCH_STATE,
+-  type SearchState,
+-} from "@/lib/search/types";
+-
+-function isDefaultSearch(state: SearchState) {
+-  return (
+-    state.query.trim() === "" &&
+-    Object.keys(state.feeling).length === 0 &&
+-    state.includeAllTags.length === 0 &&
+-    state.excludeAnyTags.length === 0 &&
+-    state.anyArtists.length === 0 &&
+-    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
+-    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
+-  );
+-}
+-
+-function uniqueSorted(values: string[]) {
+-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+-}
+ 
+ export function FeedStepList() {
+   const steps = useQuery(api.steps.listMySteps);
+   const existing = useQuery(api.steps.getExistingTagsAndArtists);
+-  const [searchState, setSearchState] =
+-    useState<SearchState>(DEFAULT_SEARCH_STATE);
+-  const [isSearchOpen, setIsSearchOpen] = useState(false);
+-  const hasMounted = useRef(false);
+   const {
+     editingStepId,
+     isInlineStepEditOpen,
+@@ -44,120 +16,29 @@
+     closeInlineStepEdit,
+   } = useInlineStepEdit();
+ 
+-  const searchResults = useMemo(
+-    () => querySearch(steps ?? [], searchState),
+-    [steps, searchState],
+-  );
+-  const optionSource = useMemo(
+-    () => ({
+-      tags: uniqueSorted(
+-        steps?.flatMap((step) => [...step.tags, ...step.smartTags]) ?? [],
+-      ),
+-      artists: uniqueSorted(steps?.flatMap((step) => step.artists) ?? []),
+-    }),
+-    [steps],
+-  );
+-  const visibleSteps = searchResults.map((result) => result.step);
+-  const searchIsActive = !isDefaultSearch(searchState);
+-
+-  useEffect(() => {
+-    if (!hasMounted.current) {
+-      hasMounted.current = true;
+-      return;
+-    }
+-
+-    window.scrollTo({ top: 0, behavior: "smooth" });
+-  }, [searchState]);
+-
+-  return (
+-    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+-      <div className="flex flex-wrap items-start justify-between gap-4">
+-        <div>
+-          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
+-            Steps
+-          </p>
+-          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
+-        </div>
+-        {steps === undefined ? null : (
+-          <SearchButton
+-            isActive={searchIsActive}
+-            matchedCount={searchResults.length}
+-            onClick={() => setIsSearchOpen(true)}
+-          />
+-        )}
+-      </div>
+-
+-      {steps === undefined ? (
++  if (steps === undefined) {
++    return (
++      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+         <p className="rounded-md border border-[var(--border)] bg-white px-4 py-5 text-sm text-[var(--muted-foreground)]">
+           Loading steps...
+-        </p>
+-      ) : steps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No steps yet.
+-        </p>
+-      ) : visibleSteps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No matching steps.
+         </p>
+-      ) : (
+-        <ul className="flex flex-col gap-3">
+-          {visibleSteps.map((step) => (
+-            <li
+-              key={step._id}
+-              className="rounded-md border border-[var(--border)] bg-white p-4 shadow-sm"
+-            >
+-              <div className="flex items-start justify-between gap-4">
+-                <div className="min-w-0">
+-                  <h2 className="truncate text-lg font-semibold">
+-                    {step.name}
+-                  </h2>
+-                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+-                    #{step.identifier} · {step.kind} · difficulty{" "}
+-                    {step.difficulty}
+-                  </p>
+-                  <div className="mt-3 flex flex-wrap gap-1.5">
+-                    {[...step.feeling, ...step.tags, ...step.smartTags]
+-                      .slice(0, 8)
+-                      .map((tag) => (
+-                        <span
+-                          key={tag}
+-                          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs"
+-                        >
+-                          {tag}
+-                        </span>
+-                      ))}
+-                  </div>
+-                </div>
+-                <button
+-                  type="button"
+-                  aria-label={`Edit ${step.name}`}
+-                  className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
+-                  onClick={() => openInlineStepEdit(step._id)}
+-                >
+-                  <MoreHorizontal size={16} aria-hidden="true" />
+-                  <Pencil size={16} aria-hidden="true" />
+-                  Edit
+-                </button>
+-              </div>
+-            </li>
+-          ))}
+-        </ul>
+-      )}
++      </main>
++    );
++  }
+ 
+-      <SearchOverlay
+-        isOpen={isSearchOpen}
+-        value={searchState}
+-        matchedCount={searchResults.length}
+-        tagOptions={existing?.tags ?? optionSource.tags}
+-        artistOptions={existing?.artists ?? optionSource.artists}
+-        onChange={setSearchState}
+-        onClose={() => setIsSearchOpen(false)}
++  return (
++    <>
++      <StepsFeed
++        steps={steps}
++        tagOptions={existing?.tags}
++        artistOptions={existing?.artists}
++        onEditStep={openInlineStepEdit}
+       />
+       <InlineStepEditModal
+         stepId={editingStepId}
+         isOpen={isInlineStepEditOpen}
+         onClose={closeInlineStepEdit}
+       />
+-    </main>
++    </>
+   );
+ }
+diff --git a/components/steps/step-tags.tsx b/components/steps/step-tags.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c52ea4636a682765b65ae77659d7a6659ab18f6
+--- /dev/null
++++ b/components/steps/step-tags.tsx
+@@ -0,0 +1,27 @@
++type StepTagsProps = {
++  values: string[];
++  limit?: number;
++};
++
++export function StepTags({ values, limit = 12 }: StepTagsProps) {
++  const unique = [
++    ...new Set(values.filter((value) => value.trim().length > 0)),
++  ];
++
++  if (unique.length === 0) {
++    return null;
++  }
++
++  return (
++    <ul className="flex flex-wrap gap-1.5" aria-label="Step tags">
++      {unique.slice(0, limit).map((tag) => (
++        <li
++          key={tag}
++          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs text-[var(--foreground)]"
++        >
++          {tag}
++        </li>
++      ))}
++    </ul>
++  );
++}
+diff --git a/components/steps/variation-feed-modal.tsx b/components/steps/variation-feed-modal.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b4bb041fa762bebedc0d4e97908a85870803526
+--- /dev/null
++++ b/components/steps/variation-feed-modal.tsx
+@@ -0,0 +1,74 @@
++"use client";
++
++import { X } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { FeedStepCard } from "@/components/feed/feed-step-card";
++
++type VariationFeedModalProps = {
++  sourceStep: Doc<"steps"> | null;
++  steps: Doc<"steps">[];
++  isOpen: boolean;
++  origin?: string;
++  onClose: () => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function VariationFeedModal({
++  sourceStep,
++  steps,
++  isOpen,
++  origin,
++  onClose,
++  onEditStep,
++}: VariationFeedModalProps) {
++  if (!isOpen || !sourceStep) {
++    return null;
++  }
++
++  return (
++    <div className="fixed inset-0 z-40 flex bg-black/45 p-0 sm:p-6">
++      <button
++        type="button"
++        aria-label="Close variations backdrop"
++        className="absolute inset-0 h-full w-full cursor-default"
++        onClick={onClose}
++      />
++      <section
++        role="dialog"
++        aria-modal="true"
++        aria-labelledby="variation-feed-title"
++        className="relative flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:rounded-lg"
++      >
++        <header className="flex min-h-16 items-center justify-between border-[var(--border)] border-b px-4 sm:px-6">
++          <h2 id="variation-feed-title" className="text-lg font-semibold">
++            Variations for {sourceStep.name}
++          </h2>
++          <button
++            type="button"
++            aria-label="Close variations"
++            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++            onClick={onClose}
++          >
++            <X size={18} aria-hidden="true" />
++          </button>
++        </header>
++        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
++          <ul className="flex flex-col gap-4">
++            {steps.map((step) => (
++              <li key={step._id}>
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={[]}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={() => undefined}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      </section>
++    </div>
++  );
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/feed.test.tsx b/tests/components/feed.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7c4338132b27f188212056cb205571e240303e0
+--- /dev/null
++++ b/tests/components/feed.test.tsx
+@@ -0,0 +1,168 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { StepsFeed } from "@/components/feed/steps-feed";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++
++const mocks = vi.hoisted(() => ({
++  recordPractice: vi.fn(),
++  recordStepView: vi.fn(),
++  openEdit: vi.fn(),
++  clipboardWriteText: vi.fn(),
++}));
++
++function stepId(value: string) {
++  return value as Id<"steps">;
++}
++
++function step(overrides: Partial<Doc<"steps">> = {}): Doc<"steps"> {
++  const identifier = (overrides.identifier as number | undefined) ?? 1;
++
++  return {
++    _id: `step-${identifier}` as Id<"steps">,
++    _creationTime: 100 + identifier,
++    ownerId: "user",
++    identifier,
++    name: `Step ${identifier}`,
++    videos: [
++      {
++        hash: `hash-${identifier}`,
++        storageKey: `/videos/${identifier}.mp4`,
++        snapshotStorageKey: `/snapshots/${identifier}.jpg`,
++        width: 1080,
++        height: 1920,
++      },
++    ],
++    videoHashes: [`hash-${identifier}`],
++    difficulty: 3,
++    feeling: ["urban"],
++    kind: "step",
++    tags: ["turn"],
++    artists: ["Petchu"],
++    notes: "",
++    smartTags: ["Shadow position"],
++    removedSmartTags: [],
++    tokens: ["shadow", "turn", "shadow|turn"],
++    variationKey: "group-main",
++    practiceRecords: [],
++    viewRecords: [],
++    createdAt: 100 + identifier,
++    updatedAt: 100 + identifier,
++    ...overrides,
++  };
++}
++
++vi.mock("convex/react", () => ({
++  useMutation: () => mocks.recordPractice,
++}));
++
++describe("StepsFeed", () => {
++  beforeEach(() => {
++    mocks.recordPractice.mockReset();
++    mocks.recordPractice.mockResolvedValue("step-1");
++    mocks.recordStepView.mockReset();
++    mocks.recordStepView.mockResolvedValue("step-1");
++    mocks.openEdit.mockReset();
++    mocks.clipboardWriteText.mockReset();
++    vi.spyOn(window, "innerHeight", "get").mockReturnValue(900);
++    vi.spyOn(window, "scrollY", "get").mockReturnValue(0);
++  });
++
++  it("renders a virtualized feed with stable capped video sizing", () => {
++    const steps = Array.from({ length: 60 }, (_, index) =>
++      step({ identifier: index + 1, _id: stepId(`step-${index + 1}`) }),
++    );
++
++    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
++
++    expect(screen.getByText("Step 60")).toBeVisible();
++    expect(screen.queryByText("Step 1")).not.toBeInTheDocument();
++    const videoFrame = screen.getByTestId("feed-video-frame-step-60");
++    expect(videoFrame).toHaveStyle({
++      aspectRatio: "1080 / 1920",
++      maxHeight: "60vh",
++    });
++  });
++
++  it("shows tags, variations, practice, copy link, and edit actions", async () => {
++    const user = userEvent.setup();
++    vi.spyOn(globalThis.navigator.clipboard, "writeText").mockImplementation(
++      mocks.clipboardWriteText,
++    );
++    const steps = [
++      step({ _id: stepId("step-main"), identifier: 1, name: "Shadow turn" }),
++      step({
++        _id: stepId("step-variation"),
++        identifier: 2,
++        name: "Shadow exit",
++      }),
++      step({
++        _id: stepId("step-other"),
++        identifier: 3,
++        name: "Saida",
++        variationKey: "group-other",
++      }),
++    ];
++
++    render(
++      <StepsFeed
++        steps={steps}
++        origin="https://steps.test"
++        onEditStep={mocks.openEdit}
++      />,
++    );
++
++    const card = screen.getByRole("article", { name: "Shadow turn" });
++    expect(within(card).getByText("turn")).toBeVisible();
++    expect(within(card).getByText("Shadow position")).toBeVisible();
++
++    await user.click(
++      within(card).getByRole("button", { name: "Show 1 variation" }),
++    );
++    const modal = screen.getByRole("dialog", {
++      name: "Variations for Shadow turn",
++    });
++    expect(within(modal).getByText("Shadow exit")).toBeVisible();
++    expect(within(modal).queryByText("Saida")).not.toBeInTheDocument();
++
++    await user.click(
++      within(modal).getByRole("button", { name: "Close variations" }),
++    );
++    const refreshedCard = screen.getByRole("article", { name: "Shadow turn" });
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Practice Shadow turn",
++      }),
++    );
++    await waitFor(() =>
++      expect(mocks.recordPractice).toHaveBeenCalledWith({
++        id: "step-main",
++        record: expect.objectContaining({
++          date: expect.any(Number),
++          startOfDay: expect.any(Number),
++        }),
++      }),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    const menu = screen.getByRole("menu", { name: "Options for Shadow turn" });
++    await user.click(within(menu).getByRole("menuitem", { name: "Copy link" }));
++    await waitFor(() =>
++      expect(mocks.clipboardWriteText).toHaveBeenCalledWith(
++        "https://steps.test/s/step-main",
++      ),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
++    expect(mocks.openEdit).toHaveBeenCalledWith("step-main");
++  });
++});
+
+exec
+/bin/zsh -lc 'git status --porcelain' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/runs/run-20260507-215557-6595-iter-3.log
+
+exec
+/bin/zsh -lc 'git show -s --format="%h %s" HEAD' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+e0f7d50 chore(ralph): record feed progress
+
+exec
+/bin/zsh -lc 'git log --oneline -3' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+e0f7d50 chore(ralph): record feed progress
+0c6a6e7 feat(feed): add virtualized step feed
+30c23a7 chore(ralph): update run state
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index d66213ad36f5210b0876a4a7f718fc96709c9ec1..5ca3d0edce9182883f2dd8b5e8f86c5a07f73bd0
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -427,3 +427,39 @@
+   - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
+   - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
+ ---
++
++## [2026-05-07 22:23:20 CEST] - S05-03-build-virtualized-feed-and-step-actions: Build Virtualized Feed And Step Actions
++Thread:
++Run: 20260507-215557-6595 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 0c6a6e7 feat(feed): add virtualized step feed
++- Post-commit status: `.ralph/runs/run-20260507-215557-6595-iter-3.log` modified by active run logging before progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; feed workflow verified by component tests
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - components/feed/feed-step-card.tsx
++  - components/feed/options-menu.tsx
++  - components/feed/step-actions.tsx
++  - components/feed/steps-feed.tsx
++  - components/steps/feed-step-list.tsx
++  - components/steps/step-tags.tsx
++  - components/steps/variation-feed-modal.tsx
++  - tests/components/feed.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-3.log
++- What was implemented
++  Main `/feed` now queries owned steps through the existing wrapper, applies search/filter/sort, renders a virtualized card feed, sizes primary videos from stored dimensions with a `60vh` cap, mounts visible videos only, displays tags, variation counts, practice action, options menu, copy link, and inline edit entry. Variation overlay shows same-key related steps only.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep `FeedStepList` as the Convex/auth wrapper and put testable feed behavior in `components/feed/steps-feed.tsx`.
++  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
++  - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
++---
+diff --git a/components/feed/feed-step-card.tsx b/components/feed/feed-step-card.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c853a0c259d5922714b402480e1423f7236c21e1
+--- /dev/null
++++ b/components/feed/feed-step-card.tsx
+@@ -0,0 +1,117 @@
++"use client";
++
++import { Pencil, Shapes } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { StepTags } from "@/components/steps/step-tags";
++import { VideoPlayer } from "@/components/video/video-player";
++import { OptionsMenu } from "./options-menu";
++import { StepActions } from "./step-actions";
++
++type FeedStepCardProps = {
++  step: Doc<"steps">;
++  relatedSteps: Doc<"steps">[];
++  isVisible: boolean;
++  origin?: string;
++  onShowVariations: (step: Doc<"steps">) => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function FeedStepCard({
++  step,
++  relatedSteps,
++  isVisible,
++  origin,
++  onShowVariations,
++  onEditStep,
++}: FeedStepCardProps) {
++  const primaryVideo = step.videos[0];
++  const hasVariations = relatedSteps.length > 0;
++  const tags = [
++    step.kind,
++    `difficulty ${step.difficulty}`,
++    ...step.feeling,
++    ...step.tags,
++    ...step.smartTags,
++    ...step.artists,
++  ];
++
++  return (
++    <article
++      aria-label={step.name}
++      className="overflow-hidden rounded-md border border-[var(--border)] bg-white shadow-sm"
++    >
++      {primaryVideo ? (
++        <div
++          data-testid={`feed-video-frame-${step._id}`}
++          className="w-full overflow-hidden bg-black"
++          style={{
++            aspectRatio:
++              primaryVideo.width && primaryVideo.height
++                ? `${primaryVideo.width} / ${primaryVideo.height}`
++                : "16 / 9",
++            maxHeight: "60vh",
++          }}
++        >
++          {isVisible ? (
++            <VideoPlayer
++              videoUrl={primaryVideo.storageKey}
++              snapshotUrl={primaryVideo.snapshotStorageKey}
++              width={primaryVideo.width}
++              height={primaryVideo.height}
++              autoPlay={typeof IntersectionObserver !== "undefined"}
++              enableFullSize
++              ariaLabel={`${step.name} video`}
++            />
++          ) : null}
++        </div>
++      ) : null}
++
++      <div className="flex flex-col gap-4 p-4">
++        <div className="flex items-start justify-between gap-4">
++          <div className="min-w-0">
++            <h2 className="truncate text-xl font-semibold">{step.name}</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              #{step.identifier}
++            </p>
++          </div>
++          <OptionsMenu
++            stepId={step._id}
++            stepName={step.name}
++            origin={origin}
++            hasVariations={hasVariations}
++            onShowVariations={() => onShowVariations(step)}
++            onEdit={() => onEditStep(step._id)}
++          />
++        </div>
++
++        <StepTags values={tags} />
++
++        <div className="flex flex-wrap items-center gap-2">
++          {hasVariations ? (
++            <button
++              type="button"
++              className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++              aria-label={`Show ${relatedSteps.length} ${
++                relatedSteps.length === 1 ? "variation" : "variations"
++              }`}
++              onClick={() => onShowVariations(step)}
++            >
++              <Shapes size={16} aria-hidden="true" />
++              {relatedSteps.length}
++            </button>
++          ) : null}
++          <StepActions stepId={step._id} stepName={step.name} />
++          <button
++            type="button"
++            aria-label={`Edit ${step.name}`}
++            className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
++            onClick={() => onEditStep(step._id)}
++          >
++            <Pencil size={16} aria-hidden="true" />
++            Edit
++          </button>
++        </div>
++      </div>
++    </article>
++  );
++}
+diff --git a/components/feed/options-menu.tsx b/components/feed/options-menu.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d519dbe5832490060595b3b1f74eff12508cf85
+--- /dev/null
++++ b/components/feed/options-menu.tsx
+@@ -0,0 +1,121 @@
++"use client";
++
++import { Copy, MoreHorizontal, Pencil, Shapes, X } from "lucide-react";
++import { useEffect, useRef, useState } from "react";
++
++type OptionsMenuProps = {
++  stepId: string;
++  stepName: string;
++  origin?: string;
++  hasVariations: boolean;
++  onShowVariations: () => void;
++  onEdit: () => void;
++};
++
++export function OptionsMenu({
++  stepId,
++  stepName,
++  origin,
++  hasVariations,
++  onShowVariations,
++  onEdit,
++}: OptionsMenuProps) {
++  const [isOpen, setIsOpen] = useState(false);
++  const rootRef = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    if (!isOpen) {
++      return;
++    }
++
++    function handleClick(event: MouseEvent) {
++      if (!rootRef.current?.contains(event.target as Node)) {
++        setIsOpen(false);
++      }
++    }
++
++    document.addEventListener("click", handleClick);
++
++    return () => document.removeEventListener("click", handleClick);
++  }, [isOpen]);
++
++  async function copyLink() {
++    const base =
++      origin ?? (typeof window === "undefined" ? "" : window.location.origin);
++    const href = `${base}/s/${stepId}`;
++
++    await globalThis.navigator.clipboard?.writeText(href);
++    setIsOpen(false);
++  }
++
++  return (
++    <div ref={rootRef} className="relative">
++      <button
++        type="button"
++        aria-expanded={isOpen}
++        aria-label={`Open options for ${stepName}`}
++        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++        onClick={() => setIsOpen((current) => !current)}
++      >
++        <MoreHorizontal size={18} aria-hidden="true" />
++      </button>
++
++      {isOpen ? (
++        <div
++          role="menu"
++          aria-label={`Options for ${stepName}`}
++          className="absolute right-0 z-20 mt-2 w-52 rounded-md border border-[var(--border)] bg-white p-1 shadow-lg"
++        >
++          <MenuItem
++            icon={<Copy size={16} />}
++            label="Copy link"
++            onClick={copyLink}
++          />
++          {hasVariations ? (
++            <MenuItem
++              icon={<Shapes size={16} />}
++              label="Show variations"
++              onClick={() => {
++                setIsOpen(false);
++                onShowVariations();
++              }}
++            />
++          ) : null}
++          <MenuItem
++            icon={<Pencil size={16} />}
++            label="Edit"
++            onClick={() => {
++              setIsOpen(false);
++              onEdit();
++            }}
++          />
++          <MenuItem
++            icon={<X size={16} />}
++            label="Cancel"
++            onClick={() => setIsOpen(false)}
++          />
++        </div>
++      ) : null}
++    </div>
++  );
++}
++
++type MenuItemProps = {
++  icon: React.ReactNode;
++  label: string;
++  onClick: () => void | Promise<void>;
++};
++
++function MenuItem({ icon, label, onClick }: MenuItemProps) {
++  return (
++    <button
++      type="button"
++      role="menuitem"
++      className="flex h-10 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-[var(--muted)]"
++      onClick={onClick}
++    >
++      {icon}
++      {label}
++    </button>
++  );
++}
+diff --git a/components/feed/step-actions.tsx b/components/feed/step-actions.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f18a14093f0d768dbeb146eb27079369b78db449
+--- /dev/null
++++ b/components/feed/step-actions.tsx
+@@ -0,0 +1,40 @@
++"use client";
++
++import { useMutation } from "convex/react";
++import { Dumbbell } from "lucide-react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { startOfLocalDay } from "@/lib/domain/dates";
++
++type StepActionsProps = {
++  stepId: string;
++  stepName: string;
++};
++
++export function StepActions({ stepId, stepName }: StepActionsProps) {
++  const recordPractice = useMutation(api.steps.recordPractice);
++
++  async function handlePractice() {
++    const now = Date.now();
++
++    await recordPractice({
++      id: stepId as Id<"steps">,
++      record: {
++        date: now,
++        startOfDay: startOfLocalDay(now),
++      },
++    });
++  }
++
++  return (
++    <button
++      type="button"
++      className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
++      aria-label={`Practice ${stepName}`}
++      onClick={handlePractice}
++    >
++      <Dumbbell size={16} aria-hidden="true" />
++      Practice
++    </button>
++  );
++}
+diff --git a/components/feed/steps-feed.tsx b/components/feed/steps-feed.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..849f0866a815e6c3372b00acf8bca777b61bdabf
+--- /dev/null
++++ b/components/feed/steps-feed.tsx
+@@ -0,0 +1,212 @@
++"use client";
++
++import { useEffect, useMemo, useRef, useState } from "react";
++import { SearchButton } from "@/components/search/search-button";
++import { SearchOverlay } from "@/components/search/search-overlay";
++import { VariationFeedModal } from "@/components/steps/variation-feed-modal";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { querySearch } from "@/lib/search/query-search";
++import { DEFAULT_SEARCH_STATE, type SearchState } from "@/lib/search/types";
++import { FeedStepCard } from "./feed-step-card";
++
++const estimatedCardHeight = 760;
++const overscan = 3;
++
++type StepsFeedProps = {
++  steps: Doc<"steps">[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  origin?: string;
++  onEditStep: (stepId: string) => void;
++};
++
++function isDefaultSearch(state: SearchState) {
++  return (
++    state.query.trim() === "" &&
++    Object.keys(state.feeling).length === 0 &&
++    state.includeAllTags.length === 0 &&
++    state.excludeAnyTags.length === 0 &&
++    state.anyArtists.length === 0 &&
++    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
++    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
++  );
++}
++
++function uniqueSorted(values: string[]) {
++  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
++}
++
++function useVirtualWindow(count: number) {
++  const [range, setRange] = useState({ start: 0, end: 12 });
++
++  useEffect(() => {
++    function updateRange() {
++      const viewportHeight =
++        typeof window === "undefined" ? 900 : window.innerHeight;
++      const scrollTop = typeof window === "undefined" ? 0 : window.scrollY;
++      const start = Math.max(
++        0,
++        Math.floor(scrollTop / estimatedCardHeight) - overscan,
++      );
++      const visible =
++        Math.ceil(viewportHeight / estimatedCardHeight) + overscan * 2;
++
++      setRange({
++        start,
++        end: Math.min(count, start + visible),
++      });
++    }
++
++    updateRange();
++    window.addEventListener("scroll", updateRange, { passive: true });
++    window.addEventListener("resize", updateRange);
++
++    return () => {
++      window.removeEventListener("scroll", updateRange);
++      window.removeEventListener("resize", updateRange);
++    };
++  }, [count]);
++
++  return range;
++}
++
++export function StepsFeed({
++  steps,
++  tagOptions,
++  artistOptions,
++  origin,
++  onEditStep,
++}: StepsFeedProps) {
++  const [searchState, setSearchState] =
++    useState<SearchState>(DEFAULT_SEARCH_STATE);
++  const [isSearchOpen, setIsSearchOpen] = useState(false);
++  const [variationSource, setVariationSource] = useState<Doc<"steps"> | null>(
++    null,
++  );
++  const hasMounted = useRef(false);
++  const searchResults = useMemo(
++    () => querySearch(steps, searchState),
++    [steps, searchState],
++  );
++  const visibleSteps = searchResults.map((result) => result.step);
++  const { start, end } = useVirtualWindow(visibleSteps.length);
++  const renderedSteps = visibleSteps.slice(start, end);
++  const derivedOptions = useMemo(
++    () => ({
++      tags: uniqueSorted(
++        steps.flatMap((step) => [...step.tags, ...step.smartTags]),
++      ),
++      artists: uniqueSorted(steps.flatMap((step) => step.artists)),
++    }),
++    [steps],
++  );
++  const searchIsActive = !isDefaultSearch(searchState);
++  const variationSteps = useMemo(() => {
++    if (!variationSource || variationSource.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (step) =>
++        step._id !== variationSource._id &&
++        step.variationKey === variationSource.variationKey,
++    );
++  }, [steps, variationSource]);
++
++  useEffect(() => {
++    if (!hasMounted.current) {
++      hasMounted.current = true;
++      return;
++    }
++
++    window.scrollTo({ top: 0, behavior: "smooth" });
++  }, [searchState]);
++
++  function relatedStepsFor(step: Doc<"steps">) {
++    if (step.variationKey.trim().length === 0) {
++      return [];
++    }
++
++    return steps.filter(
++      (candidate) =>
++        candidate._id !== step._id &&
++        candidate.variationKey === step.variationKey,
++    );
++  }
++
++  return (
++    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
++      <div className="flex flex-wrap items-start justify-between gap-4">
++        <div>
++          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
++            Steps
++          </p>
++          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
++        </div>
++        <SearchButton
++          isActive={searchIsActive}
++          matchedCount={searchResults.length}
++          onClick={() => setIsSearchOpen(true)}
++        />
++      </div>
++
++      {steps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No steps yet.
++        </p>
++      ) : visibleSteps.length === 0 ? (
++        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
++          No matching steps.
++        </p>
++      ) : (
++        <div
++          style={{
++            height: visibleSteps.length * estimatedCardHeight,
++            position: "relative",
++          }}
++        >
++          <ul
++            className="absolute left-0 right-0 flex flex-col gap-4"
++            style={{
++              transform: `translateY(${start * estimatedCardHeight}px)`,
++            }}
++          >
++            {renderedSteps.map((step) => (
++              <li
++                key={step._id}
++                style={{ minHeight: estimatedCardHeight - 16 }}
++              >
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={relatedStepsFor(step)}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={setVariationSource}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      )}
++
++      <SearchOverlay
++        isOpen={isSearchOpen}
++        value={searchState}
++        matchedCount={searchResults.length}
++        tagOptions={tagOptions ?? derivedOptions.tags}
++        artistOptions={artistOptions ?? derivedOptions.artists}
++        onChange={setSearchState}
++        onClose={() => setIsSearchOpen(false)}
++      />
++      <VariationFeedModal
++        sourceStep={variationSource}
++        steps={variationSteps}
++        origin={origin}
++        isOpen={variationSource !== null}
++        onClose={() => setVariationSource(null)}
++        onEditStep={onEditStep}
++      />
++    </main>
++  );
++}
+diff --git a/components/steps/feed-step-list.tsx b/components/steps/feed-step-list.tsx
+index d0df55c710949e820cfa8fd2e4e583815edadc20..ed98842ff77d9de1d7950bb968b01139c41e7f20
+--- a/components/steps/feed-step-list.tsx
++++ b/components/steps/feed-step-list.tsx
+@@ -1,42 +1,14 @@
+ "use client";
+ 
+ import { useQuery } from "convex/react";
+-import { MoreHorizontal, Pencil } from "lucide-react";
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import { SearchButton } from "@/components/search/search-button";
+-import { SearchOverlay } from "@/components/search/search-overlay";
+ import { InlineStepEditModal } from "@/components/steps/inline-step-edit-modal";
+ import { useInlineStepEdit } from "@/components/steps/use-inline-step-edit";
++import { StepsFeed } from "@/components/feed/steps-feed";
+ import { api } from "@/convex/_generated/api";
+-import { querySearch } from "@/lib/search/query-search";
+-import {
+-  DEFAULT_SEARCH_STATE,
+-  type SearchState,
+-} from "@/lib/search/types";
+-
+-function isDefaultSearch(state: SearchState) {
+-  return (
+-    state.query.trim() === "" &&
+-    Object.keys(state.feeling).length === 0 &&
+-    state.includeAllTags.length === 0 &&
+-    state.excludeAnyTags.length === 0 &&
+-    state.anyArtists.length === 0 &&
+-    state.sort.type === DEFAULT_SEARCH_STATE.sort.type &&
+-    state.sort.direction === DEFAULT_SEARCH_STATE.sort.direction
+-  );
+-}
+-
+-function uniqueSorted(values: string[]) {
+-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+-}
+ 
+ export function FeedStepList() {
+   const steps = useQuery(api.steps.listMySteps);
+   const existing = useQuery(api.steps.getExistingTagsAndArtists);
+-  const [searchState, setSearchState] =
+-    useState<SearchState>(DEFAULT_SEARCH_STATE);
+-  const [isSearchOpen, setIsSearchOpen] = useState(false);
+-  const hasMounted = useRef(false);
+   const {
+     editingStepId,
+     isInlineStepEditOpen,
+@@ -44,120 +16,29 @@
+     closeInlineStepEdit,
+   } = useInlineStepEdit();
+ 
+-  const searchResults = useMemo(
+-    () => querySearch(steps ?? [], searchState),
+-    [steps, searchState],
+-  );
+-  const optionSource = useMemo(
+-    () => ({
+-      tags: uniqueSorted(
+-        steps?.flatMap((step) => [...step.tags, ...step.smartTags]) ?? [],
+-      ),
+-      artists: uniqueSorted(steps?.flatMap((step) => step.artists) ?? []),
+-    }),
+-    [steps],
+-  );
+-  const visibleSteps = searchResults.map((result) => result.step);
+-  const searchIsActive = !isDefaultSearch(searchState);
+-
+-  useEffect(() => {
+-    if (!hasMounted.current) {
+-      hasMounted.current = true;
+-      return;
+-    }
+-
+-    window.scrollTo({ top: 0, behavior: "smooth" });
+-  }, [searchState]);
+-
+-  return (
+-    <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+-      <div className="flex flex-wrap items-start justify-between gap-4">
+-        <div>
+-          <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
+-            Steps
+-          </p>
+-          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
+-        </div>
+-        {steps === undefined ? null : (
+-          <SearchButton
+-            isActive={searchIsActive}
+-            matchedCount={searchResults.length}
+-            onClick={() => setIsSearchOpen(true)}
+-          />
+-        )}
+-      </div>
+-
+-      {steps === undefined ? (
++  if (steps === undefined) {
++    return (
++      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6">
+         <p className="rounded-md border border-[var(--border)] bg-white px-4 py-5 text-sm text-[var(--muted-foreground)]">
+           Loading steps...
+-        </p>
+-      ) : steps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No steps yet.
+-        </p>
+-      ) : visibleSteps.length === 0 ? (
+-        <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+-          No matching steps.
+         </p>
+-      ) : (
+-        <ul className="flex flex-col gap-3">
+-          {visibleSteps.map((step) => (
+-            <li
+-              key={step._id}
+-              className="rounded-md border border-[var(--border)] bg-white p-4 shadow-sm"
+-            >
+-              <div className="flex items-start justify-between gap-4">
+-                <div className="min-w-0">
+-                  <h2 className="truncate text-lg font-semibold">
+-                    {step.name}
+-                  </h2>
+-                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+-                    #{step.identifier} · {step.kind} · difficulty{" "}
+-                    {step.difficulty}
+-                  </p>
+-                  <div className="mt-3 flex flex-wrap gap-1.5">
+-                    {[...step.feeling, ...step.tags, ...step.smartTags]
+-                      .slice(0, 8)
+-                      .map((tag) => (
+-                        <span
+-                          key={tag}
+-                          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs"
+-                        >
+-                          {tag}
+-                        </span>
+-                      ))}
+-                  </div>
+-                </div>
+-                <button
+-                  type="button"
+-                  aria-label={`Edit ${step.name}`}
+-                  className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium"
+-                  onClick={() => openInlineStepEdit(step._id)}
+-                >
+-                  <MoreHorizontal size={16} aria-hidden="true" />
+-                  <Pencil size={16} aria-hidden="true" />
+-                  Edit
+-                </button>
+-              </div>
+-            </li>
+-          ))}
+-        </ul>
+-      )}
++      </main>
++    );
++  }
+ 
+-      <SearchOverlay
+-        isOpen={isSearchOpen}
+-        value={searchState}
+-        matchedCount={searchResults.length}
+-        tagOptions={existing?.tags ?? optionSource.tags}
+-        artistOptions={existing?.artists ?? optionSource.artists}
+-        onChange={setSearchState}
+-        onClose={() => setIsSearchOpen(false)}
++  return (
++    <>
++      <StepsFeed
++        steps={steps}
++        tagOptions={existing?.tags}
++        artistOptions={existing?.artists}
++        onEditStep={openInlineStepEdit}
+       />
+       <InlineStepEditModal
+         stepId={editingStepId}
+         isOpen={isInlineStepEditOpen}
+         onClose={closeInlineStepEdit}
+       />
+-    </main>
++    </>
+   );
+ }
+diff --git a/components/steps/step-tags.tsx b/components/steps/step-tags.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c52ea4636a682765b65ae77659d7a6659ab18f6
+--- /dev/null
++++ b/components/steps/step-tags.tsx
+@@ -0,0 +1,27 @@
++type StepTagsProps = {
++  values: string[];
++  limit?: number;
++};
++
++export function StepTags({ values, limit = 12 }: StepTagsProps) {
++  const unique = [
++    ...new Set(values.filter((value) => value.trim().length > 0)),
++  ];
++
++  if (unique.length === 0) {
++    return null;
++  }
++
++  return (
++    <ul className="flex flex-wrap gap-1.5" aria-label="Step tags">
++      {unique.slice(0, limit).map((tag) => (
++        <li
++          key={tag}
++          className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs text-[var(--foreground)]"
++        >
++          {tag}
++        </li>
++      ))}
++    </ul>
++  );
++}
+diff --git a/components/steps/variation-feed-modal.tsx b/components/steps/variation-feed-modal.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b4bb041fa762bebedc0d4e97908a85870803526
+--- /dev/null
++++ b/components/steps/variation-feed-modal.tsx
+@@ -0,0 +1,74 @@
++"use client";
++
++import { X } from "lucide-react";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { FeedStepCard } from "@/components/feed/feed-step-card";
++
++type VariationFeedModalProps = {
++  sourceStep: Doc<"steps"> | null;
++  steps: Doc<"steps">[];
++  isOpen: boolean;
++  origin?: string;
++  onClose: () => void;
++  onEditStep: (stepId: string) => void;
++};
++
++export function VariationFeedModal({
++  sourceStep,
++  steps,
++  isOpen,
++  origin,
++  onClose,
++  onEditStep,
++}: VariationFeedModalProps) {
++  if (!isOpen || !sourceStep) {
++    return null;
++  }
++
++  return (
++    <div className="fixed inset-0 z-40 flex bg-black/45 p-0 sm:p-6">
++      <button
++        type="button"
++        aria-label="Close variations backdrop"
++        className="absolute inset-0 h-full w-full cursor-default"
++        onClick={onClose}
++      />
++      <section
++        role="dialog"
++        aria-modal="true"
++        aria-labelledby="variation-feed-title"
++        className="relative flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:rounded-lg"
++      >
++        <header className="flex min-h-16 items-center justify-between border-[var(--border)] border-b px-4 sm:px-6">
++          <h2 id="variation-feed-title" className="text-lg font-semibold">
++            Variations for {sourceStep.name}
++          </h2>
++          <button
++            type="button"
++            aria-label="Close variations"
++            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-white"
++            onClick={onClose}
++          >
++            <X size={18} aria-hidden="true" />
++          </button>
++        </header>
++        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
++          <ul className="flex flex-col gap-4">
++            {steps.map((step) => (
++              <li key={step._id}>
++                <FeedStepCard
++                  step={step}
++                  relatedSteps={[]}
++                  origin={origin}
++                  isVisible
++                  onShowVariations={() => undefined}
++                  onEditStep={onEditStep}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      </section>
++    </div>
++  );
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/feed.test.tsx b/tests/components/feed.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7c4338132b27f188212056cb205571e240303e0
+--- /dev/null
++++ b/tests/components/feed.test.tsx
+@@ -0,0 +1,168 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { StepsFeed } from "@/components/feed/steps-feed";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++
++const mocks = vi.hoisted(() => ({
++  recordPractice: vi.fn(),
++  recordStepView: vi.fn(),
++  openEdit: vi.fn(),
++  clipboardWriteText: vi.fn(),
++}));
++
++function stepId(value: string) {
++  return value as Id<"steps">;
++}
++
++function step(overrides: Partial<Doc<"steps">> = {}): Doc<"steps"> {
++  const identifier = (overrides.identifier as number | undefined) ?? 1;
++
++  return {
++    _id: `step-${identifier}` as Id<"steps">,
++    _creationTime: 100 + identifier,
++    ownerId: "user",
++    identifier,
++    name: `Step ${identifier}`,
++    videos: [
++      {
++        hash: `hash-${identifier}`,
++        storageKey: `/videos/${identifier}.mp4`,
++        snapshotStorageKey: `/snapshots/${identifier}.jpg`,
++        width: 1080,
++        height: 1920,
++      },
++    ],
++    videoHashes: [`hash-${identifier}`],
++    difficulty: 3,
++    feeling: ["urban"],
++    kind: "step",
++    tags: ["turn"],
++    artists: ["Petchu"],
++    notes: "",
++    smartTags: ["Shadow position"],
++    removedSmartTags: [],
++    tokens: ["shadow", "turn", "shadow|turn"],
++    variationKey: "group-main",
++    practiceRecords: [],
++    viewRecords: [],
++    createdAt: 100 + identifier,
++    updatedAt: 100 + identifier,
++    ...overrides,
++  };
++}
++
++vi.mock("convex/react", () => ({
++  useMutation: () => mocks.recordPractice,
++}));
++
++describe("StepsFeed", () => {
++  beforeEach(() => {
++    mocks.recordPractice.mockReset();
++    mocks.recordPractice.mockResolvedValue("step-1");
++    mocks.recordStepView.mockReset();
++    mocks.recordStepView.mockResolvedValue("step-1");
++    mocks.openEdit.mockReset();
++    mocks.clipboardWriteText.mockReset();
++    vi.spyOn(window, "innerHeight", "get").mockReturnValue(900);
++    vi.spyOn(window, "scrollY", "get").mockReturnValue(0);
++  });
++
++  it("renders a virtualized feed with stable capped video sizing", () => {
++    const steps = Array.from({ length: 60 }, (_, index) =>
++      step({ identifier: index + 1, _id: stepId(`step-${index + 1}`) }),
++    );
++
++    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
++
++    expect(screen.getByText("Step 60")).toBeVisible();
++    expect(screen.queryByText("Step 1")).not.toBeInTheDocument();
++    const videoFrame = screen.getByTestId("feed-video-frame-step-60");
++    expect(videoFrame).toHaveStyle({
++      aspectRatio: "1080 / 1920",
++      maxHeight: "60vh",
++    });
++  });
++
++  it("shows tags, variations, practice, copy link, and edit actions", async () => {
++    const user = userEvent.setup();
++    vi.spyOn(globalThis.navigator.clipboard, "writeText").mockImplementation(
++      mocks.clipboardWriteText,
++    );
++    const steps = [
++      step({ _id: stepId("step-main"), identifier: 1, name: "Shadow turn" }),
++      step({
++        _id: stepId("step-variation"),
++        identifier: 2,
++        name: "Shadow exit",
++      }),
++      step({
++        _id: stepId("step-other"),
++        identifier: 3,
++        name: "Saida",
++        variationKey: "group-other",
++      }),
++    ];
++
++    render(
++      <StepsFeed
++        steps={steps}
++        origin="https://steps.test"
++        onEditStep={mocks.openEdit}
++      />,
++    );
++
++    const card = screen.getByRole("article", { name: "Shadow turn" });
++    expect(within(card).getByText("turn")).toBeVisible();
++    expect(within(card).getByText("Shadow position")).toBeVisible();
++
++    await user.click(
++      within(card).getByRole("button", { name: "Show 1 variation" }),
++    );
++    const modal = screen.getByRole("dialog", {
++      name: "Variations for Shadow turn",
++    });
++    expect(within(modal).getByText("Shadow exit")).toBeVisible();
++    expect(within(modal).queryByText("Saida")).not.toBeInTheDocument();
++
++    await user.click(
++      within(modal).getByRole("button", { name: "Close variations" }),
++    );
++    const refreshedCard = screen.getByRole("article", { name: "Shadow turn" });
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Practice Shadow turn",
++      }),
++    );
++    await waitFor(() =>
++      expect(mocks.recordPractice).toHaveBeenCalledWith({
++        id: "step-main",
++        record: expect.objectContaining({
++          date: expect.any(Number),
++          startOfDay: expect.any(Number),
++        }),
++      }),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    const menu = screen.getByRole("menu", { name: "Options for Shadow turn" });
++    await user.click(within(menu).getByRole("menuitem", { name: "Copy link" }));
++    await waitFor(() =>
++      expect(mocks.clipboardWriteText).toHaveBeenCalledWith(
++        "https://steps.test/s/step-main",
++      ),
++    );
++
++    await user.click(
++      within(refreshedCard).getByRole("button", {
++        name: "Open options for Shadow turn",
++      }),
++    );
++    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
++    expect(mocks.openEdit).toHaveBeenCalledWith("step-main");
++  });
++});
+
+codex
+The commit hook appended to the active run log after the progress commit, leaving only that file dirty. I’m committing that final run-log delta without rerunning hooks so the tree can end clean.
