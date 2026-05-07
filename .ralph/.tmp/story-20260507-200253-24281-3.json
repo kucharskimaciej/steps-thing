@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "total": 26,
+  "remaining": 17,
+  "quality_gates": [
+    "pnpm typecheck",
+    "pnpm lint",
+    "pnpm test",
+    "pnpm build when UI/app behavior is affected",
+    "CI=1 pnpm exec convex dev --once --tail-logs disable when Convex schema/functions are affected; skip only for network/auth fetch failures, not schema/function errors",
+    "NEVER write to Linear without explicit user permission"
+  ],
+  "id": "S03-03-build-video-player-and-modal",
+  "title": "Build Video Player And Modal"
+}
