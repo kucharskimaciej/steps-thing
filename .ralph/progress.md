@@ -6,6 +6,48 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 20:25 CEST] - S03-02-implement-video-processing-pipeline: Implement Video Processing Pipeline
+Thread:
+Run: 20260507-200253-24281 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 0078aa8 feat(video): add processing pipeline
+- Post-commit status: `.ralph/runs/run-20260507-200253-24281-iter-2.log` modified before progress commit
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+- Files changed:
+  - convex/videoProcessing.ts
+  - convex/videoProcessingActions.ts
+  - workers/video-processing/processVideo.ts
+  - lib/video/gcs.ts
+  - lib/video/processing-status.ts
+  - lib/video/storage-key.ts
+  - convex/steps.ts
+  - convex/adminBackfills.ts
+  - convex/schema.ts
+  - convex/model/steps.ts
+  - convex/model/validators.ts
+  - convex/videoStorageActions.ts
+  - convex/_generated/api.d.ts
+  - tests/video/processing-status.test.ts
+  - tests/convex-schema.test.ts
+  - tests/convex-owner-apis.test.ts
+  - .ralph/activity.log
+  - .ralph/runs/run-20260507-200253-24281-iter-2.log
+- What was implemented
+  Owner-scoped video processing jobs; create/update scheduling for incomplete videos; retry and admin backfill enqueue paths; GCS signed read/write helpers; ffmpeg worker for dimensions, 50% snapshot, and 256px thumbnail; idempotent metadata patching for matching videos only.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep pure video-processing metadata rules in `lib/video/processing-status.ts` so Convex mutations and tests share the same idempotency logic.
+  - Gotchas encountered: Node fetch typings reject raw `Buffer` bodies; Blob wrapping keeps uploads type-safe.
+  - Useful context: runtime processing needs `ffmpeg` and `ffprobe` available plus `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
+---
+
 ## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
 Thread:
 Run: 20260507-200253-24281 (iteration 1)
