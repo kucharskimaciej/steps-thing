@@ -41,6 +41,42 @@ async function getOwnedStep(
   return step;
 }
 
+async function mergeVariationGroups({
+  ctx,
+  ownerId,
+  mergeVariationKeys,
+  variationKey,
+  now,
+}: {
+  ctx: MutationCtx;
+  ownerId: string;
+  mergeVariationKeys: string[] | undefined;
+  variationKey: string;
+  now: number;
+}) {
+  const keys = new Set(
+    (mergeVariationKeys ?? [])
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0 && key !== variationKey),
+  );
+
+  if (keys.size === 0) {
+    return;
+  }
+
+  const steps = await getOwnedSteps(ctx, ownerId);
+  await Promise.all(
+    steps
+      .filter((step) => keys.has(step.variationKey))
+      .map((step) =>
+        ctx.db.patch(step._id, {
+          variationKey,
+          updatedAt: now,
+        }),
+      ),
+  );
+}
+
 export const listMySteps = query({
   args: {},
   handler: async (ctx) => {
@@ -130,6 +166,14 @@ export const createStep = mutation({
       input: args.input,
     });
     const stepId = await ctx.db.insert("steps", step);
+
+    await mergeVariationGroups({
+      ctx,
+      ownerId,
+      mergeVariationKeys: args.input.mergeVariationKeys,
+      variationKey: args.input.variationKey,
+      now,
+    });
 
     await enqueueMissingVideoProcessing(ctx, stepId, step.videos);
 

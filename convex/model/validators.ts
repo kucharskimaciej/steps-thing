@@ -46,6 +46,7 @@ export const createStepInputValidator = v.object({
   notes: v.string(),
   removedSmartTags: v.array(v.string()),
   variationKey: v.string(),
+  mergeVariationKeys: v.optional(v.array(v.string())),
 });
 
 export const updateStepInputValidator = v.object({

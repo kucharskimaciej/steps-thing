@@ -13,7 +13,10 @@ type StepFormWithUserDataProps = {
   initialValues?: Partial<StepFormValues>;
   currentStepId?: string;
   existingVideos?: ExistingStepVideo[];
-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
+  onSubmit?: (
+    input: StepMutationInput,
+    intent: "save" | "save-and-create-another",
+  ) => void | Promise<void>;
 };
 
 export function StepFormWithUserData(props: StepFormWithUserDataProps) {

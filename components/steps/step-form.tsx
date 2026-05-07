@@ -5,6 +5,8 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Checklist } from "@/components/forms/checklist";
 import { Select } from "@/components/forms/select";
 import { TagsInput } from "@/components/forms/tags-input";
+import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
+import type { Id } from "@/convex/_generated/dataModel";
 import { getActiveAppConfig } from "@/lib/domain/config";
 import {
   allowedSmartTags,
@@ -22,12 +24,21 @@ import {
 } from "@/lib/steps/step-form-schema";
 
 type StepFormProps = {
+  id?: string;
   initialValues?: Partial<StepFormValues>;
   currentStepId?: string;
   existingVideos?: ExistingStepVideo[];
   tagOptions?: string[];
   artistOptions?: string[];
-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
+  submitLabel?: string;
+  hideActions?: boolean;
+  videoMode?: "readonly" | "upload";
+  resetSignal?: number;
+  onValuesChange?: (values: StepFormValues) => void;
+  onSubmit?: (
+    input: StepMutationInput,
+    intent: "save" | "save-and-create-another",
+  ) => void | Promise<void>;
 };
 
 function nextVariationKey() {
@@ -58,16 +69,22 @@ function toMutationInput(values: StepFormValues): StepMutationInput {
 }
 
 export function StepForm({
+  id,
   initialValues,
   currentStepId,
   existingVideos = [],
   tagOptions = [],
   artistOptions = [],
+  submitLabel = "Save step",
+  hideActions = false,
+  videoMode = "readonly",
+  resetSignal = 0,
+  onValuesChange,
   onSubmit,
 }: StepFormProps) {
   const config = getActiveAppConfig();
   const smartTagOptions = useMemo(() => allowedSmartTags(), []);
-  const [values, setValues] = useState<StepFormValues>(() => {
+  const initialFormValues = useMemo(() => {
     const defaults = createStepFormDefaults(initialValues);
     const smartFields = deriveStepFormSmartFields(
       defaults.name,
@@ -79,9 +96,20 @@ export function StepForm({
       smartTags: initialValues?.smartTags ?? smartFields.smartTags,
       tokens: initialValues?.tokens ?? smartFields.tokens,
     };
-  });
+  }, [initialValues]);
+  const [values, setValues] = useState<StepFormValues>(initialFormValues);
   const [errors, setErrors] = useState<StepFormErrors>({});
   const [submitMessage, setSubmitMessage] = useState("");
+
+  useEffect(() => {
+    setValues(initialFormValues);
+    setErrors({});
+    setSubmitMessage("");
+  }, [initialFormValues, resetSignal]);
+
+  useEffect(() => {
+    onValuesChange?.(values);
+  }, [onValuesChange, values]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -136,36 +164,61 @@ export function StepForm({
       return;
     }
 
-    await onSubmit?.(toMutationInput(result.values));
-    setSubmitMessage("Step is ready to save.");
+    const submitter = (event.nativeEvent as SubmitEvent)
+      .submitter as HTMLButtonElement | null;
+    const intent =
+      submitter?.value === "save-and-create-another"
+        ? "save-and-create-another"
+        : "save";
+
+    await onSubmit?.(toMutationInput(result.values), intent);
+    setSubmitMessage("Step saved.");
   }
 
   return (
-    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
+    <form id={id} className="flex flex-col gap-6" onSubmit={handleSubmit}>
       <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
-        <div>
-          <h2 id="videos-heading" className="text-base font-semibold">
-            Videos
-          </h2>
-          {errors.videos ? (
-            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
-          ) : null}
-        </div>
-        {values.videos.length > 0 ? (
-          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
-            {values.videos.map((video) => (
-              <li key={video.hash} className="px-3 py-2 text-sm">
-                <span className="font-medium">{video.hash.slice(0, 12)}</span>
-                <span className="ml-2 text-[var(--muted-foreground)]">
-                  {video.storageKey}
-                </span>
-              </li>
-            ))}
-          </ul>
+        {videoMode === "upload" ? (
+          <>
+            <StepVideoUploadField
+              key={resetSignal}
+              initialVideos={values.videos}
+              currentStepId={currentStepId as Id<"steps"> | undefined}
+              onVideosChange={(videos) => update({ videos })}
+            />
+            {errors.videos ? (
+              <p className="text-sm text-red-700">{errors.videos}</p>
+            ) : null}
+          </>
         ) : (
-          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
-            Add a video before saving.
-          </p>
+          <>
+            <div>
+              <h2 id="videos-heading" className="text-base font-semibold">
+                Videos
+              </h2>
+              {errors.videos ? (
+                <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
+              ) : null}
+            </div>
+            {values.videos.length > 0 ? (
+              <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
+                {values.videos.map((video) => (
+                  <li key={video.hash} className="px-3 py-2 text-sm">
+                    <span className="font-medium">
+                      {video.hash.slice(0, 12)}
+                    </span>
+                    <span className="ml-2 text-[var(--muted-foreground)]">
+                      {video.storageKey}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
+                Add a video before saving.
+              </p>
+            )}
+          </>
         )}
       </section>
 
@@ -176,7 +229,9 @@ export function StepForm({
           value={values.name}
           onChange={(event) => update({ name: event.target.value })}
         />
-        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
+        {errors.name ? (
+          <span className="text-sm text-red-700">{errors.name}</span>
+        ) : null}
       </label>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -228,7 +283,10 @@ export function StepForm({
         />
       </div>
 
-      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
+      <section
+        className="flex flex-col gap-2"
+        aria-labelledby="smart-tags-heading"
+      >
         <h2 id="smart-tags-heading" className="text-sm font-medium">
           Smart tags
         </h2>
@@ -296,15 +354,22 @@ export function StepForm({
       </label>
 
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="submit"
-          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
-        >
-          <Save size={16} aria-hidden="true" />
-          Save step
-        </button>
+        {hideActions ? null : (
+          <button
+            type="submit"
+            name="intent"
+            value="save"
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
+          >
+            <Save size={16} aria-hidden="true" />
+            {submitLabel}
+          </button>
+        )}
         {submitMessage ? (
-          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
+          <p
+            className="text-sm text-[var(--muted-foreground)]"
+            aria-live="polite"
+          >
             {submitMessage}
           </p>
         ) : null}

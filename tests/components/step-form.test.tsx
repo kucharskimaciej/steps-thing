@@ -102,18 +102,21 @@ describe("StepForm", () => {
     await user.click(screen.getByLabelText("Semba"));
     await user.click(screen.getByRole("button", { name: "Save step" }));
 
-    expect(onSubmit).toHaveBeenCalledWith({
-      name: "Saida damska",
-      videos: [validVideo],
-      difficulty: 1,
-      feeling: ["semba"],
-      kind: "step",
-      tags: [],
-      artists: [],
-      notes: "",
-      removedSmartTags: [],
-      variationKey: expect.any(String),
-    });
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        name: "Saida damska",
+        videos: [validVideo],
+        difficulty: 1,
+        feeling: ["semba"],
+        kind: "step",
+        tags: [],
+        artists: [],
+        notes: "",
+        removedSmartTags: [],
+        variationKey: expect.any(String),
+      },
+      "save",
+    );
   });
 
   it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
@@ -155,7 +158,9 @@ describe("StepForm", () => {
       }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
-    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Restore smart tag Shadow position"),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Save step" }));
 
@@ -163,6 +168,7 @@ describe("StepForm", () => {
       expect.objectContaining({
         removedSmartTags: ["Shadow position"],
       }),
+      "save",
     );
   });
 
@@ -186,7 +192,9 @@ describe("StepForm", () => {
     await user.type(screen.getByLabelText("Tags"), "balance{enter}");
     await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
 
-    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Selected tags")).getByText("balance"),
+    ).toBeInTheDocument();
     expect(
       within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
     ).toBeInTheDocument();

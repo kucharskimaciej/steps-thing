@@ -190,7 +190,7 @@
     {
       "id": "S04-02-implement-create-step-page",
       "title": "Implement Create Step Page",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S04-01-build-step-form-validation-and-smart-tags"
       ],
@@ -199,7 +199,10 @@
         "Create persistence is active; no legacy \"log only\" behavior remains.",
         "Candidate ranking reacts to form data.",
         "Variation group selection is clear."
-      ]
+      ],
+      "startedAt": "2026-05-07T19:07:34.867512+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-07T19:07:34.867712+00:00"
     },
     {
       "id": "S04-03-implement-edit-step-page",
