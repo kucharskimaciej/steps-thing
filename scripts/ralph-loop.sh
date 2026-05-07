@@ -28,7 +28,7 @@ for ((iteration = 1; iteration <= TASK_LIMIT; iteration++)); do
   TODO_BEFORE="$(grep -F -- "- [ ]" "$WORKTREE_DIR/TODO.md" | wc -l | tr -d " ")"
 
   echo "Starting Ralph iteration $iteration/$TASK_LIMIT."
-  if ! codex exec --full-auto --cd "$WORKTREE_DIR" "$(cat "$WORKTREE_DIR/tasks/RALPH_PROMPT.md")"; then
+  if ! codex exec --sandbox workspace-write --cd "$WORKTREE_DIR" "$(cat "$WORKTREE_DIR/tasks/RALPH_PROMPT.md")"; then
     echo "Codex failed. Worktree kept at: $WORKTREE_DIR" >&2
     exit 1
   fi
