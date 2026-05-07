@@ -19,7 +19,7 @@ Context: [tasks/1 - project setup/context.md](tasks/1%20-%20project%20setup/cont
 
 Context: [tasks/2 - data model and migrations/context.md](tasks/2%20-%20data%20model%20and%20migrations/context.md)
 
-- [ ] [Define Convex schema and indexes](tasks/2%20-%20data%20model%20and%20migrations/1%20-%20define%20convex%20schema%20and%20indexes.md)
+- [x] [Define Convex schema and indexes](tasks/2%20-%20data%20model%20and%20migrations/1%20-%20define%20convex%20schema%20and%20indexes.md)
 - [ ] [Implement domain configuration and derived helpers](tasks/2%20-%20data%20model%20and%20migrations/2%20-%20implement%20domain%20configuration%20and%20derived%20helpers.md)
 - [ ] [Implement owner-scoped queries and mutations](tasks/2%20-%20data%20model%20and%20migrations/3%20-%20implement%20owner%20scoped%20queries%20and%20mutations.md)
 - [ ] [Create migration and backfill tooling](tasks/2%20-%20data%20model%20and%20migrations/4%20-%20create%20migration%20and%20backfill%20tooling.md)
