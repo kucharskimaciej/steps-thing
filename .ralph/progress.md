@@ -6,6 +6,39 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
+Thread:
+Run: 20260507-205447-62953 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: d18dd36 feat(steps): implement edit page
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test -- --run tests/components/edit-step-page.test.tsx` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+  - Command: `dev-browser http://localhost:3001/steps/invalid/edit` -> PASS, protected route redirected to sign-in without app crash; edit workflow verified by component tests
+- Files changed:
+  - app/(authenticated)/steps/[stepId]/edit/page.tsx
+  - components/steps/edit-step-workflow.tsx
+  - convex/model/validators.ts
+  - convex/steps.ts
+  - tests/components/edit-step-page.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Full-page edit workflow at `/steps/[stepId]/edit`, owner-safe edit query with invalid-ID normalization, shared form initialization from existing step data, duplicate video validation excluding the edited step, live similarity-ranked variation sidebar, current variation group preselection, update save to `/steps`, fresh server-side variation key assignment, selected group merge, and unavailable state for missing/unauthorized steps.
+- **Learnings for future iterations:**
+  - Patterns discovered: edit mirrors create cleanly as a thin workflow around shared `StepForm`, with mutation-specific variation behavior in Convex.
+  - Gotchas encountered: passing rebuilt `initialValues` into `StepForm` caused a reset loop; memoize loaded form values.
+  - Useful context: `getStepForEdit` should accept route strings and normalize with `ctx.db.normalizeId` so bad URL IDs show unavailable UI instead of validator errors.
+---
+
 ## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
 Thread:
 Run: 20260507-200253-24281 (iteration 3)

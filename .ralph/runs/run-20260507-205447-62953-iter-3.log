@@ -31299,3 +31299,4417 @@ index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6ec
 
 codex
 Review outcome: security owner checks stay server-side; invalid IDs normalize to unavailable; no new broad data exposure. Performance matches existing create-page pattern with one owned step list; no extra server scans beyond selected variation merge. Regression risk covered by edit workflow tests and full gates. Committing implementation now.
+exec
+/bin/zsh -lc 'git add -A && git status --short' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+M  .agents/tasks/prd.json
+A  .ralph/.tmp/prompt-20260507-205447-62953-3.md
+A  .ralph/.tmp/story-20260507-205447-62953-3.json
+A  .ralph/.tmp/story-20260507-205447-62953-3.md
+M  .ralph/activity.log
+A  .ralph/runs/run-20260507-205447-62953-iter-3.log
+M  app/(authenticated)/steps/[stepId]/edit/page.tsx
+A  components/steps/edit-step-workflow.tsx
+M  convex/model/validators.ts
+M  convex/steps.ts
+A  tests/components/edit-step-page.test.tsx
+
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+exec
+/bin/zsh -lc 'git commit -m "feat(steps): implement edit page"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 2659ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 108 files in 25ms. No fixes applied.
+[main d18dd36] feat(steps): implement edit page
+ 11 files changed, 32042 insertions(+), 12 deletions(-)
+ create mode 100644 .ralph/.tmp/prompt-20260507-205447-62953-3.md
+ create mode 100644 .ralph/.tmp/story-20260507-205447-62953-3.json
+ create mode 100644 .ralph/.tmp/story-20260507-205447-62953-3.md
+ create mode 100644 .ralph/runs/run-20260507-205447-62953-iter-3.log
+ create mode 100644 components/steps/edit-step-workflow.tsx
+ create mode 100644 tests/components/edit-step-page.test.tsx
+
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+exec
+/bin/zsh -lc "date '+%Y-%m-%d %H:%M:%S %Z'" in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+2026-05-07 21:28:25 CEST
+
+exec
+/bin/zsh -lc 'git show -s --format="%h %s" HEAD' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+d18dd36 feat(steps): implement edit page
+
+exec
+/bin/zsh -lc 'git status --porcelain' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/runs/run-20260507-205447-62953-iter-3.log
+
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+exec
+/bin/zsh -lc 'tail -80 .ralph/progress.md' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+  Owner-scoped Convex auth helper, step queries/mutations, practice session queries/mutations, lock checks, identifier allocation, idempotent practice/session step handling, public step read without ownerId exposure, and focused model/auth tests.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep Convex entry points thin and put behavior in `convex/model/*` helpers for unit coverage.
+  - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+  - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+---
+
+## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
+Thread:
+Run: 20260507-205447-62953 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 71a4d85 feat(steps): add shared step form
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/forms/checklist.tsx
+  - components/forms/select.tsx
+  - components/forms/tags-input.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - lib/steps/step-form-defaults.ts
+  - lib/steps/step-form-schema.ts
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
+  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
+  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
+---
+
+## [2026-05-07 21:17:12 +0200] - S04-02-implement-create-step-page: Implement Create Step Page
+Thread:
+Run: 20260507-205447-62953 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: e465728 feat(steps): implement create step page
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+  - Command: `dev-browser http://localhost:3001/steps/new` -> PASS, protected route redirected to sign-in without app crash; create workflow verified by component tests
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/steps/create-step-workflow.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - components/steps/variation-candidate-list.tsx
+  - components/steps/variation-toggle.tsx
+  - convex/model/validators.ts
+  - convex/steps.ts
+  - tests/components/create-step-page.test.tsx
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Authenticated create workflow at `/steps/new`, split layout, top save actions, upload-enabled shared form, existing tags/artists queries, candidate ranking from live form data, variation group selection, create persistence, server-side variation group merge, and save-and-create-another preservation/reset behavior.
+- **Learnings for future iterations:**
+  - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
+  - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+  - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+---
+
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+apply patch
+patch: completed
+/Users/maciejkucharski/work/steps-thing/.ralph/progress.md
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 2aa747da572a56a5bb293eb9657b9876d3bcc5af..01abac3925e0ddcbf00ccf9d5afeaae4bd96ef69
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,39 @@
+ 
+ ---
+ 
++## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: d18dd36 feat(steps): implement edit page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test -- --run tests/components/edit-step-page.test.tsx` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/invalid/edit` -> PASS, protected route redirected to sign-in without app crash; edit workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/[stepId]/edit/page.tsx
++  - components/steps/edit-step-workflow.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/edit-step-page.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Full-page edit workflow at `/steps/[stepId]/edit`, owner-safe edit query with invalid-ID normalization, shared form initialization from existing step data, duplicate video validation excluding the edited step, live similarity-ranked variation sidebar, current variation group preselection, update save to `/steps`, fresh server-side variation key assignment, selected group merge, and unavailable state for missing/unauthorized steps.
++- **Learnings for future iterations:**
++  - Patterns discovered: edit mirrors create cleanly as a thin workflow around shared `StepForm`, with mutation-specific variation behavior in Convex.
++  - Gotchas encountered: passing rebuilt `initialValues` into `StepForm` caused a reset loop; memoize loaded form values.
++  - Useful context: `getStepForEdit` should accept route strings and normalize with `ctx.db.normalizeId` so bad URL IDs show unavailable UI instead of validator errors.
++---
++
+ ## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
+ Thread:
+ Run: 20260507-200253-24281 (iteration 3)
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 2aa747da572a56a5bb293eb9657b9876d3bcc5af..01abac3925e0ddcbf00ccf9d5afeaae4bd96ef69
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,39 @@
+ 
+ ---
+ 
++## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: d18dd36 feat(steps): implement edit page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test -- --run tests/components/edit-step-page.test.tsx` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/invalid/edit` -> PASS, protected route redirected to sign-in without app crash; edit workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/[stepId]/edit/page.tsx
++  - components/steps/edit-step-workflow.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/edit-step-page.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Full-page edit workflow at `/steps/[stepId]/edit`, owner-safe edit query with invalid-ID normalization, shared form initialization from existing step data, duplicate video validation excluding the edited step, live similarity-ranked variation sidebar, current variation group preselection, update save to `/steps`, fresh server-side variation key assignment, selected group merge, and unavailable state for missing/unauthorized steps.
++- **Learnings for future iterations:**
++  - Patterns discovered: edit mirrors create cleanly as a thin workflow around shared `StepForm`, with mutation-specific variation behavior in Convex.
++  - Gotchas encountered: passing rebuilt `initialValues` into `StepForm` caused a reset loop; memoize loaded form values.
++  - Useful context: `getStepForEdit` should accept route strings and normalize with `ctx.db.normalizeId` so bad URL IDs show unavailable UI instead of validator errors.
++---
++
+ ## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
+ Thread:
+ Run: 20260507-200253-24281 (iteration 3)
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+exec
+/bin/zsh -lc 'ralph log "Updated progress log for S04-03 edit step page"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+Using local templates: /Users/maciejkucharski/work/steps-thing/.agents/ralph
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 2aa747da572a56a5bb293eb9657b9876d3bcc5af..01abac3925e0ddcbf00ccf9d5afeaae4bd96ef69
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,39 @@
+ 
+ ---
+ 
++## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: d18dd36 feat(steps): implement edit page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test -- --run tests/components/edit-step-page.test.tsx` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/invalid/edit` -> PASS, protected route redirected to sign-in without app crash; edit workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/[stepId]/edit/page.tsx
++  - components/steps/edit-step-workflow.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/edit-step-page.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Full-page edit workflow at `/steps/[stepId]/edit`, owner-safe edit query with invalid-ID normalization, shared form initialization from existing step data, duplicate video validation excluding the edited step, live similarity-ranked variation sidebar, current variation group preselection, update save to `/steps`, fresh server-side variation key assignment, selected group merge, and unavailable state for missing/unauthorized steps.
++- **Learnings for future iterations:**
++  - Patterns discovered: edit mirrors create cleanly as a thin workflow around shared `StepForm`, with mutation-specific variation behavior in Convex.
++  - Gotchas encountered: passing rebuilt `initialValues` into `StepForm` caused a reset loop; memoize loaded form values.
++  - Useful context: `getStepForEdit` should accept route strings and normalize with `ctx.db.normalizeId` so bad URL IDs show unavailable UI instead of validator errors.
++---
++
+ ## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
+ Thread:
+ Run: 20260507-200253-24281 (iteration 3)
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/activity.log
+ M .ralph/progress.md
+ M .ralph/runs/run-20260507-205447-62953-iter-3.log
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 2aa747da572a56a5bb293eb9657b9876d3bcc5af..01abac3925e0ddcbf00ccf9d5afeaae4bd96ef69
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,39 @@
+ 
+ ---
+ 
++## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 3)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-3.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: d18dd36 feat(steps): implement edit page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test -- --run tests/components/edit-step-page.test.tsx` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/invalid/edit` -> PASS, protected route redirected to sign-in without app crash; edit workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/[stepId]/edit/page.tsx
++  - components/steps/edit-step-workflow.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/edit-step-page.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Full-page edit workflow at `/steps/[stepId]/edit`, owner-safe edit query with invalid-ID normalization, shared form initialization from existing step data, duplicate video validation excluding the edited step, live similarity-ranked variation sidebar, current variation group preselection, update save to `/steps`, fresh server-side variation key assignment, selected group merge, and unavailable state for missing/unauthorized steps.
++- **Learnings for future iterations:**
++  - Patterns discovered: edit mirrors create cleanly as a thin workflow around shared `StepForm`, with mutation-specific variation behavior in Convex.
++  - Gotchas encountered: passing rebuilt `initialValues` into `StepForm` caused a reset loop; memoize loaded form values.
++  - Useful context: `getStepForEdit` should accept route strings and normalize with `ctx.db.normalizeId` so bad URL IDs show unavailable UI instead of validator errors.
++---
++
+ ## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
+ Thread:
+ Run: 20260507-200253-24281 (iteration 3)
+diff --git a/app/(authenticated)/steps/[stepId]/edit/page.tsx b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+index c3fd2d04aef981134edb9848835b727f9065492c..11eb427a97538338b51b539cd81a0bc92598c286
+--- a/app/(authenticated)/steps/[stepId]/edit/page.tsx
++++ b/app/(authenticated)/steps/[stepId]/edit/page.tsx
+@@ -1,4 +1,4 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
+ 
+ type EditStepPageProps = {
+   params: Promise<{
+@@ -9,10 +9,5 @@
+ export default async function EditStepPage({ params }: EditStepPageProps) {
+   const { stepId } = await params;
+ 
+-  return (
+-    <PlaceholderPage
+-      title="Edit Step"
+-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
+-    />
+-  );
++  return <EditStepWorkflow stepId={stepId} />;
+ }
+diff --git a/components/steps/edit-step-workflow.tsx b/components/steps/edit-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6086254c8d18e1e27a12293bcf0f53aef76f89b6
+--- /dev/null
++++ b/components/steps/edit-step-workflow.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useEffect, useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "edit-step-form";
++
++function toFormValues(step: Doc<"steps">): StepFormValues {
++  return {
++    videos: step.videos,
++    name: step.name,
++    difficulty: step.difficulty,
++    feeling: step.feeling,
++    kind: step.kind,
++    tags: step.tags,
++    artists: step.artists,
++    notes: step.notes,
++    smartTags: step.smartTags,
++    removedSmartTags: step.removedSmartTags,
++    tokens: step.tokens,
++  };
++}
++
++function toExistingVideos(steps: Doc<"steps">[] = []): ExistingStepVideo[] {
++  return steps.flatMap((step) =>
++    step.videos.map((video) => ({
++      hash: video.hash,
++      stepId: step._id,
++      stepName: step.name,
++    })),
++  );
++}
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  currentStepId: string,
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .filter((step) => step._id !== currentStepId)
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++type EditStepWorkflowProps = {
++  stepId: string;
++};
++
++export function EditStepWorkflow({ stepId }: EditStepWorkflowProps) {
++  const router = useRouter();
++  const updateStep = useMutation(api.steps.updateStep);
++  const step = useQuery(api.steps.getStepForEdit, {
++    id: stepId,
++  });
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues | null>(null);
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [isSaving, setIsSaving] = useState(false);
++  const initialFormValues = useMemo(
++    () => (step ? toFormValues(step) : null),
++    [step],
++  );
++
++  useEffect(() => {
++    if (!step || !initialFormValues) {
++      return;
++    }
++
++    setValues(initialFormValues);
++    setSelectedVariationKeys(
++      step.variationKey.trim().length > 0 ? [step.variationKey] : [],
++    );
++  }, [initialFormValues, step]);
++
++  const candidates = useMemo(
++    () => (values ? rankCandidates(steps ?? [], stepId, values) : []),
++    [steps, stepId, values],
++  );
++  const existingVideos = useMemo(() => toExistingVideos(steps ?? []), [steps]);
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(input: StepMutationInput) {
++    if (!step) {
++      return;
++    }
++
++    setIsSaving(true);
++
++    try {
++      await updateStep({
++        id: step._id as Id<"steps">,
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  if (step === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <h1 className="text-2xl font-semibold">Step unavailable</h1>
++        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
++          This step was not found or you do not have access to it.
++        </p>
++      </div>
++    );
++  }
++
++  if (step === undefined || values === null || initialFormValues === null) {
++    return (
++      <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
++        <p className="text-sm text-[var(--muted-foreground)]">
++          Loading step...
++        </p>
++      </div>
++    );
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into this edited step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Edit Step</h1>
++          </div>
++          <button
++            type="submit"
++            form={formId}
++            name="intent"
++            value="save"
++            disabled={isSaving}
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++          >
++            <Save size={16} aria-hidden="true" />
++            Save
++          </button>
++        </div>
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialFormValues}
++            currentStepId={stepId}
++            existingVideos={existingVideos}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 8ae5e2411882d81e33843f15088a0ab5605ea50c..9ef1d1c368353e53a9994ab2aea3714a0bf4be72
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -60,6 +60,7 @@
+   notes: v.optional(v.string()),
+   removedSmartTags: v.optional(v.array(v.string())),
+   variationKey: v.optional(v.string()),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const practiceRecordInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index b2da784522ce7f6eb0351b70456346fd3f8cf337..2bd6e5179c542338431dc709caca19f024c6c8ae
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,10 @@
+   return step;
+ }
+ 
++function freshVariationKey() {
++  return crypto.randomUUID();
++}
++
+ async function mergeVariationGroups({
+   ctx,
+   ownerId,
+@@ -88,11 +92,22 @@
+ });
+ 
+ export const getStepForEdit = query({
+-  args: { id: v.id("steps") },
++  args: { id: v.string() },
+   handler: async (ctx, args) => {
+     const ownerId = await requireUserId(ctx);
++    const id = ctx.db.normalizeId("steps", args.id);
++
++    if (!id) {
++      return null;
++    }
++
++    const step = await ctx.db.get(id);
++
++    if (!step || step.ownerId !== ownerId) {
++      return null;
++    }
+ 
+-    return await getOwnedStep(ctx, args.id, ownerId);
++    return step;
+   },
+ });
+ 
+@@ -189,12 +204,23 @@
+ 
+     const patch = buildStepPatch({
+       existing: step,
+-      input: args.input,
++      input: {
++        ...args.input,
++        variationKey: freshVariationKey(),
++      },
+       now: Date.now(),
+     });
+ 
+     await ctx.db.patch(args.id, patch);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: patch.variationKey ?? step.variationKey,
++      now: patch.updatedAt ?? Date.now(),
++    });
++
+     if (patch.videos) {
+       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+     }
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/edit-step-page.test.tsx b/tests/components/edit-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af4b1f5ac64d6c07fb127c074d26e6eca93c5003
+--- /dev/null
++++ b/tests/components/edit-step-page.test.tsx
+@@ -0,0 +1,160 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  updateStep: vi.fn(),
++  push: vi.fn(),
++  stepForEdit: undefined as unknown,
++}));
++
++const existingStep = {
++  _id: "step-edit",
++  name: "Shadow turn",
++  videos: [
++    {
++      hash: "hash-video",
++      storageKey: "owners/user/videos/hash-video.mp4",
++    },
++  ],
++  difficulty: 3,
++  feeling: ["semba"],
++  kind: "step",
++  tags: ["turn"],
++  artists: ["Petchu"],
++  notes: "Keep frame",
++  smartTags: ["Shadow position"],
++  removedSmartTags: [],
++  tokens: ["shadow", "turn", "shadow|turn"],
++  variationKey: "group-shadow",
++  updatedAt: 30,
++};
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.updateStep,
++    useQuery: (ref: unknown, args: unknown) => {
++      if (
++        ref === actualApi.api.steps.getStepForEdit ||
++        (args as { id?: string } | undefined)?.id === "step-edit"
++      ) {
++        return mocks.stepForEdit;
++      }
++
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        existingStep,
++        {
++          _id: "step-related",
++          name: "Shadow exit",
++          videos: [
++            {
++              hash: "hash-related",
++              storageKey: "owners/user/videos/hash-related.mp4",
++            },
++          ],
++          variationKey: "group-shadow",
++          tokens: ["shadow", "exit", "shadow|exit"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          videos: [
++            {
++              hash: "hash-basic",
++              storageKey: "owners/user/videos/hash-basic.mp4",
++            },
++          ],
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: () => <div>Video upload field</div>,
++}));
++
++describe("EditStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.updateStep.mockReset();
++    mocks.updateStep.mockResolvedValue("step-edit");
++    mocks.push.mockReset();
++    mocks.stepForEdit = existingStep;
++  });
++
++  it("loads the current step, saves updates, and returns to the list", async () => {
++    const user = userEvent.setup();
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByLabelText("Name")).toHaveValue("Shadow turn");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(screen.getByLabelText("Notes")).toHaveValue("Keep frame");
++
++    await user.clear(screen.getByLabelText("Name"));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn updated");
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.updateStep).toHaveBeenCalledWith({
++        id: "step-edit",
++        input: expect.objectContaining({
++          name: "Shadow turn updated",
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("initializes variation selection from the edited step group", () => {
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    const items = within(list as HTMLElement).getAllByRole("listitem");
++    expect(items[0]).toHaveTextContent("Shadow exit");
++    expect(
++      within(items[0]).getByRole("button", { name: "Selected" }),
++    ).toBeInTheDocument();
++  });
++
++  it("shows an unavailable state when the step is missing or unauthorized", () => {
++    mocks.stepForEdit = null;
++
++    render(<EditStepWorkflow stepId="step-edit" />);
++
++    expect(screen.getByRole("heading", { name: "Step unavailable" }));
++    expect(screen.getByText(/not found or you do not have access/i));
++  });
++});
+
