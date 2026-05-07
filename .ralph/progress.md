@@ -241,3 +241,40 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-20
   - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
   - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
 ---
+
+## [2026-05-07 21:17:12 +0200] - S04-02-implement-create-step-page: Implement Create Step Page
+Thread:
+Run: 20260507-205447-62953 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: e465728 feat(steps): implement create step page
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+  - Command: `dev-browser http://localhost:3001/steps/new` -> PASS, protected route redirected to sign-in without app crash; create workflow verified by component tests
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/steps/create-step-workflow.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - components/steps/variation-candidate-list.tsx
+  - components/steps/variation-toggle.tsx
+  - convex/model/validators.ts
+  - convex/steps.ts
+  - tests/components/create-step-page.test.tsx
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Authenticated create workflow at `/steps/new`, split layout, top save actions, upload-enabled shared form, existing tags/artists queries, candidate ranking from live form data, variation group selection, create persistence, server-side variation group merge, and save-and-create-another preservation/reset behavior.
+- **Learnings for future iterations:**
+  - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
+  - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+  - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+---
