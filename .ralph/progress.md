@@ -6,6 +6,46 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 22:10:12 +0200] - S05-02-build-search-overlay-ui: Build Search Overlay UI
+Thread:
+Run: 20260507-215557-6595 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c0e2db3 feat(search): add feed overlay controls
+- Post-commit status: `clean` after progress commit
+- Verification:
+  - Command: `pnpm test -- --run tests/components/search-overlay.test.tsx` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; overlay behavior verified by component tests
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/.tmp/prompt-20260507-215557-6595-2.md
+  - .ralph/.tmp/story-20260507-215557-6595-2.json
+  - .ralph/.tmp/story-20260507-215557-6595-2.md
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-2.log
+  - components/forms/three-state-tag.tsx
+  - components/search/search-button.tsx
+  - components/search/search-filters.tsx
+  - components/search/search-overlay.tsx
+  - components/search/search-sort.tsx
+  - components/steps/feed-step-list.tsx
+  - tests/components/search-overlay.test.tsx
+- What was implemented
+  Feed search button, active matched-count badge, debounced search overlay, text query, feeling tri-state controls, include/exclude tag filters, artist filter, sort/direction controls, clear action, back-to-results close action, search-result rendering, and scroll-to-top on applied search changes.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep overlay draft state local, debounce before writing parent feed search state, then reuse pure `querySearch` for rendering.
+  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in the dev browser without credentials; component tests provide the authenticated UI coverage.
+  - Useful context: existing tag/artist query is used when available, with loaded-step fallback options so the overlay remains useful during query loading.
+---
+
 ## [2026-05-07 21:37:30 +0200] - S04-04-implement-inline-edit-modal: Implement Inline Edit Modal
 Thread:
 Run: 20260507-205447-62953 (iteration 4)
