@@ -24947,3 +24947,474 @@ index 0000000000000000000000000000000000000000..74967718ed4a06f30a6e5b6cf5247c46
 +  });
 +});
 
+exec
+/bin/zsh -lc 'git add -A && git commit -m "docs(progress): record S05-04 outcome
+
+Append Ralph progress details for the verified view and practice
+recording story run.
+
+Reference: S05-04" && git show -s --format="%h %s" HEAD && git status --porcelain' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 2168ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 139 files in 24ms. No fixes applied.
+[feat/feed-search-and-practice d37277e] docs(progress): record S05-04 outcome
+ 3 files changed, 4188 insertions(+)
+d37277e docs(progress): record S05-04 outcome
+ M .ralph/runs/run-20260507-215557-6595-iter-4.log
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 5ca3d0edce9182883f2dd8b5e8f86c5a07f73bd0..b94024f886539b65c453d35ff37725428b274a02
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -463,3 +463,45 @@
+   - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
+   - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
+ ---
++## [2026-05-07 22:32:24 +0200] - S05-04-implement-view-and-practice-recording: Implement View And Practice Recording
++Thread:
++Run: 20260507-215557-6595 (iteration 4)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 14d81c7 feat(feed): record views and practice
++- Post-commit status: clean after progress commit
++- Verification:
++  - Command: pnpm test tests/components/feed.test.tsx tests/practice/has-recorded-practice.test.ts tests/convex-owner-apis.test.ts --run -> PASS
++  - Command: pnpm typecheck -> PASS
++  - Command: pnpm lint -> PASS
++  - Command: pnpm test -- --run -> PASS
++  - Command: pnpm build -> PASS
++  - Command: browser smoke http://localhost:3001/feed -> PASS (auth redirect, no console errors)
++  - Command: git diff --check -> PASS
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-4.log
++  - .ralph/.tmp/prompt-20260507-215557-6595-4.md
++  - .ralph/.tmp/story-20260507-215557-6595-4.json
++  - .ralph/.tmp/story-20260507-215557-6595-4.md
++  - components/feed/feed-step-card.tsx
++  - components/feed/step-actions.tsx
++  - components/practice/record-practice-button.tsx
++  - lib/feed/viewed-steps-memory.ts
++  - lib/practice/has-recorded-practice.ts
++  - tests/components/feed.test.tsx
++  - tests/convex-owner-apis.test.ts
++  - tests/practice/has-recorded-practice.test.ts
++- What was implemented
++  - Connected feed player `viewed` events to `recordStepView` with per-load client de-dupe.
++  - Added practiced-state helper/button with optimistic UI and disabled duplicate clicks.
++  - Covered same-day general vs collection-specific practice behavior.
++- **Learnings for future iterations:**
++  - Feed player already emits `onViewed`; only feed card wiring was missing.
++  - `recordPractice` server model already de-dupes by `startOfDay` plus optional collection ID.
++  - Browser feed smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
++---
+diff --git a/components/feed/feed-step-card.tsx b/components/feed/feed-step-card.tsx
+index c853a0c259d5922714b402480e1423f7236c21e1..09d0d045aab3c93a83733aa76953aed20f9e1b51
+--- a/components/feed/feed-step-card.tsx
++++ b/components/feed/feed-step-card.tsx
+@@ -1,11 +1,17 @@
+ "use client";
+ 
++import { useMutation } from "convex/react";
+ import { Pencil, Shapes } from "lucide-react";
++import { RecordPracticeButton } from "@/components/practice/record-practice-button";
+ import type { Doc } from "@/convex/_generated/dataModel";
++import { api } from "@/convex/_generated/api";
+ import { StepTags } from "@/components/steps/step-tags";
+ import { VideoPlayer } from "@/components/video/video-player";
++import {
++  hasViewedStepThisLoad,
++  markStepViewedThisLoad,
++} from "@/lib/feed/viewed-steps-memory";
+ import { OptionsMenu } from "./options-menu";
+-import { StepActions } from "./step-actions";
+ 
+ type FeedStepCardProps = {
+   step: Doc<"steps">;
+@@ -24,6 +30,7 @@
+   onShowVariations,
+   onEditStep,
+ }: FeedStepCardProps) {
++  const recordStepView = useMutation(api.steps.recordStepView);
+   const primaryVideo = step.videos[0];
+   const hasVariations = relatedSteps.length > 0;
+   const tags = [
+@@ -35,6 +42,15 @@
+     ...step.artists,
+   ];
+ 
++  async function handleViewed() {
++    if (hasViewedStepThisLoad(step._id)) {
++      return;
++    }
++
++    markStepViewedThisLoad(step._id);
++    await recordStepView({ id: step._id });
++  }
++
+   return (
+     <article
+       aria-label={step.name}
+@@ -61,6 +77,7 @@
+               autoPlay={typeof IntersectionObserver !== "undefined"}
+               enableFullSize
+               ariaLabel={`${step.name} video`}
++              onViewed={handleViewed}
+             />
+           ) : null}
+         </div>
+@@ -100,7 +117,11 @@
+               {relatedSteps.length}
+             </button>
+           ) : null}
+-          <StepActions stepId={step._id} stepName={step.name} />
++          <RecordPracticeButton
++            stepId={step._id}
++            stepName={step.name}
++            practiceRecords={step.practiceRecords}
++          />
+           <button
+             type="button"
+             aria-label={`Edit ${step.name}`}
+diff --git a/components/feed/step-actions.tsx b/components/feed/step-actions.tsx
+deleted file mode 100644
+index f18a14093f0d768dbeb146eb27079369b78db449..0000000000000000000000000000000000000000
+--- a/components/feed/step-actions.tsx
++++ /dev/null
+@@ -1,40 +0,0 @@
+-"use client";
+-
+-import { useMutation } from "convex/react";
+-import { Dumbbell } from "lucide-react";
+-import { api } from "@/convex/_generated/api";
+-import type { Id } from "@/convex/_generated/dataModel";
+-import { startOfLocalDay } from "@/lib/domain/dates";
+-
+-type StepActionsProps = {
+-  stepId: string;
+-  stepName: string;
+-};
+-
+-export function StepActions({ stepId, stepName }: StepActionsProps) {
+-  const recordPractice = useMutation(api.steps.recordPractice);
+-
+-  async function handlePractice() {
+-    const now = Date.now();
+-
+-    await recordPractice({
+-      id: stepId as Id<"steps">,
+-      record: {
+-        date: now,
+-        startOfDay: startOfLocalDay(now),
+-      },
+-    });
+-  }
+-
+-  return (
+-    <button
+-      type="button"
+-      className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
+-      aria-label={`Practice ${stepName}`}
+-      onClick={handlePractice}
+-    >
+-      <Dumbbell size={16} aria-hidden="true" />
+-      Practice
+-    </button>
+-  );
+-}
+diff --git a/components/practice/record-practice-button.tsx b/components/practice/record-practice-button.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4f6bbaf68721252ddb4c1060b3c05a864a612dea
+--- /dev/null
++++ b/components/practice/record-practice-button.tsx
+@@ -0,0 +1,77 @@
++"use client";
++
++import { useMutation } from "convex/react";
++import { Check, Dumbbell } from "lucide-react";
++import { useMemo, useState } from "react";
++import { api } from "@/convex/_generated/api";
++import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { startOfLocalDay } from "@/lib/domain/dates";
++import { hasRecordedPractice } from "@/lib/practice/has-recorded-practice";
++
++type RecordPracticeButtonProps = {
++  stepId: Id<"steps">;
++  stepName: string;
++  practiceRecords: Doc<"steps">["practiceRecords"];
++  collectionId?: Id<"practiceSessions">;
++};
++
++export function RecordPracticeButton({
++  stepId,
++  stepName,
++  practiceRecords,
++  collectionId,
++}: RecordPracticeButtonProps) {
++  const recordPractice = useMutation(api.steps.recordPractice);
++  const todayStart = useMemo(() => startOfLocalDay(Date.now()), []);
++  const [optimisticRecorded, setOptimisticRecorded] = useState(false);
++  const recorded =
++    optimisticRecorded ||
++    hasRecordedPractice({
++      records: practiceRecords,
++      startOfDay: todayStart,
++      collectionId,
++    });
++
++  async function handlePractice() {
++    if (recorded) {
++      return;
++    }
++
++    const now = Date.now();
++    setOptimisticRecorded(true);
++
++    try {
++      await recordPractice({
++        id: stepId,
++        record: {
++          date: now,
++          startOfDay: todayStart,
++          ...(collectionId ? { collectionId } : {}),
++        },
++      });
++    } catch (error) {
++      setOptimisticRecorded(false);
++      throw error;
++    }
++  }
++
++  return (
++    <button
++      type="button"
++      className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:cursor-default disabled:bg-[var(--muted-foreground)]"
++      aria-label={
++        recorded ? `Practiced ${stepName} today` : `Practice ${stepName}`
++      }
++      aria-pressed={recorded}
++      disabled={recorded}
++      onClick={handlePractice}
++    >
++      {recorded ? (
++        <Check size={16} aria-hidden="true" />
++      ) : (
++        <Dumbbell size={16} aria-hidden="true" />
++      )}
++      {recorded ? "Practiced" : "Practice"}
++    </button>
++  );
++}
+diff --git a/lib/feed/viewed-steps-memory.ts b/lib/feed/viewed-steps-memory.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5007bb2e1034d6b923029f389c352e844a97bb18
+--- /dev/null
++++ b/lib/feed/viewed-steps-memory.ts
+@@ -0,0 +1,13 @@
++const viewedStepIds = new Set<string>();
++
++export function hasViewedStepThisLoad(stepId: string): boolean {
++  return viewedStepIds.has(stepId);
++}
++
++export function markStepViewedThisLoad(stepId: string): void {
++  viewedStepIds.add(stepId);
++}
++
++export function resetViewedStepsForTests(): void {
++  viewedStepIds.clear();
++}
+diff --git a/lib/practice/has-recorded-practice.ts b/lib/practice/has-recorded-practice.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..622ee802b62758be8d7b84978c7455f014af2a53
+--- /dev/null
++++ b/lib/practice/has-recorded-practice.ts
+@@ -0,0 +1,22 @@
++import type { Id } from "@/convex/_generated/dataModel";
++
++type PracticeRecord = {
++  date?: number;
++  startOfDay: number;
++  collectionId?: Id<"practiceSessions">;
++};
++
++export function hasRecordedPractice({
++  records,
++  startOfDay,
++  collectionId,
++}: {
++  records: PracticeRecord[] | undefined;
++  startOfDay: number;
++  collectionId?: Id<"practiceSessions">;
++}): boolean {
++  return (records ?? []).some(
++    (record) =>
++      record.startOfDay === startOfDay && record.collectionId === collectionId,
++  );
++}
+diff --git a/tests/components/feed.test.tsx b/tests/components/feed.test.tsx
+index a7c4338132b27f188212056cb205571e240303e0..6f36c20967d210a186254b4a64e339fdf7144f78
+--- a/tests/components/feed.test.tsx
++++ b/tests/components/feed.test.tsx
+@@ -3,6 +3,8 @@
+ import { beforeEach, describe, expect, it, vi } from "vitest";
+ import { StepsFeed } from "@/components/feed/steps-feed";
+ import type { Doc, Id } from "@/convex/_generated/dataModel";
++import { startOfLocalDay } from "@/lib/domain/dates";
++import { resetViewedStepsForTests } from "@/lib/feed/viewed-steps-memory";
+ 
+ const mocks = vi.hoisted(() => ({
+   recordPractice: vi.fn(),
+@@ -53,11 +55,13 @@
+ }
+ 
+ vi.mock("convex/react", () => ({
+-  useMutation: () => mocks.recordPractice,
++  useMutation: () => (args: { id: string; record?: unknown }) =>
++    args.record ? mocks.recordPractice(args) : mocks.recordStepView(args),
+ }));
+ 
+ describe("StepsFeed", () => {
+   beforeEach(() => {
++    resetViewedStepsForTests();
+     mocks.recordPractice.mockReset();
+     mocks.recordPractice.mockResolvedValue("step-1");
+     mocks.recordStepView.mockReset();
+@@ -165,4 +169,59 @@
+     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+     expect(mocks.openEdit).toHaveBeenCalledWith("step-main");
+   });
++
++  it("records a video view once per step for the current app load", async () => {
++    const steps = [
++      step({ _id: stepId("step-main"), identifier: 1, name: "Shadow turn" }),
++    ];
++
++    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
++
++    const video = screen.getByLabelText("Shadow turn video");
++    Object.defineProperty(video, "duration", {
++      configurable: true,
++      value: 10,
++    });
++
++    fireTimeUpdate(video, 8);
++    fireTimeUpdate(video, 0.5);
++    fireTimeUpdate(video, 8.5);
++
++    await waitFor(() =>
++      expect(mocks.recordStepView).toHaveBeenCalledWith({ id: "step-main" }),
++    );
++    expect(mocks.recordStepView).toHaveBeenCalledTimes(1);
++  });
++
++  it("shows practiced state and blocks duplicate practice clicks", async () => {
++    const user = userEvent.setup();
++    const todayStart = startOfLocalDay(Date.now());
++    const steps = [
++      step({
++        _id: stepId("step-main"),
++        identifier: 1,
++        name: "Shadow turn",
++        practiceRecords: [{ date: todayStart + 1, startOfDay: todayStart }],
++      }),
++    ];
++
++    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
++
++    const card = screen.getByRole("article", { name: "Shadow turn" });
++    const button = within(card).getByRole("button", {
++      name: "Practiced Shadow turn today",
++    });
++
++    expect(button).toBeDisabled();
++    await user.click(button);
++    expect(mocks.recordPractice).not.toHaveBeenCalled();
++  });
+ });
++
++function fireTimeUpdate(video: HTMLElement, currentTime: number) {
++  Object.defineProperty(video, "currentTime", {
++    configurable: true,
++    value: currentTime,
++  });
++  video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
++}
+diff --git a/tests/convex-owner-apis.test.ts b/tests/convex-owner-apis.test.ts
+index 950f455bac54d6733a264882ac96ea816c478c4f..31df011b009604e668c1f596c37181defb6d61ea
+--- a/tests/convex-owner-apis.test.ts
++++ b/tests/convex-owner-apis.test.ts
+@@ -6,6 +6,7 @@
+   buildCreatedStep,
+   mergePracticeRecord,
+   nextIdentifier,
++  type PracticeRecordInput,
+ } from "@/convex/model/steps";
+ import type { Id } from "@/convex/_generated/dataModel";
+ import {
+@@ -108,6 +109,21 @@
+       }),
+     ).toBe(existing);
+   });
++
++  it("tracks general and collection practice independently", () => {
++    const sessionId = "session-a" as Id<"practiceSessions">;
++    const existing: PracticeRecordInput[] = [{ date: 10, startOfDay: 0 }];
++
++    expect(
++      mergePracticeRecord({
++        existing,
++        record: { date: 20, startOfDay: 0, collectionId: sessionId },
++      }),
++    ).toEqual([
++      { date: 20, startOfDay: 0, collectionId: sessionId },
++      { date: 10, startOfDay: 0 },
++    ]);
++  });
+ });
+ 
+ describe("owner-scoped practice session model", () => {
+diff --git a/tests/practice/has-recorded-practice.test.ts b/tests/practice/has-recorded-practice.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..74967718ed4a06f30a6e5b6cf5247c4608947068
+--- /dev/null
++++ b/tests/practice/has-recorded-practice.test.ts
+@@ -0,0 +1,26 @@
++import { describe, expect, it } from "vitest";
++import type { Id } from "@/convex/_generated/dataModel";
++import { hasRecordedPractice } from "@/lib/practice/has-recorded-practice";
++
++describe("hasRecordedPractice", () => {
++  it("matches same local day general practice", () => {
++    expect(
++      hasRecordedPractice({
++        records: [{ date: 10, startOfDay: 0 }],
++        startOfDay: 0,
++      }),
++    ).toBe(true);
++  });
++
++  it("keeps collection practice separate from general practice", () => {
++    const collectionId = "session-a" as Id<"practiceSessions">;
++
++    expect(
++      hasRecordedPractice({
++        records: [{ date: 10, startOfDay: 0 }],
++        startOfDay: 0,
++        collectionId,
++      }),
++    ).toBe(false);
++  });
++});
+
