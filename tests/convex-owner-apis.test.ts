@@ -6,6 +6,7 @@ import {
   buildCreatedStep,
   mergePracticeRecord,
   nextIdentifier,
+  type PracticeRecordInput,
 } from "@/convex/model/steps";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -107,6 +108,21 @@ describe("owner-scoped step model", () => {
         record: { date: 20, startOfDay: 0, collectionId: sessionId },
       }),
     ).toBe(existing);
+  });
+
+  it("tracks general and collection practice independently", () => {
+    const sessionId = "session-a" as Id<"practiceSessions">;
+    const existing: PracticeRecordInput[] = [{ date: 10, startOfDay: 0 }];
+
+    expect(
+      mergePracticeRecord({
+        existing,
+        record: { date: 20, startOfDay: 0, collectionId: sessionId },
+      }),
+    ).toEqual([
+      { date: 20, startOfDay: 0, collectionId: sessionId },
+      { date: 10, startOfDay: 0 },
+    ]);
   });
 });
 

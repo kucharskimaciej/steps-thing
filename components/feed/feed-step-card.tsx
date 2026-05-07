@@ -1,11 +1,17 @@
 "use client";
 
+import { useMutation } from "convex/react";
 import { Pencil, Shapes } from "lucide-react";
+import { RecordPracticeButton } from "@/components/practice/record-practice-button";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { api } from "@/convex/_generated/api";
 import { StepTags } from "@/components/steps/step-tags";
 import { VideoPlayer } from "@/components/video/video-player";
+import {
+  hasViewedStepThisLoad,
+  markStepViewedThisLoad,
+} from "@/lib/feed/viewed-steps-memory";
 import { OptionsMenu } from "./options-menu";
-import { StepActions } from "./step-actions";
 
 type FeedStepCardProps = {
   step: Doc<"steps">;
@@ -24,6 +30,7 @@ export function FeedStepCard({
   onShowVariations,
   onEditStep,
 }: FeedStepCardProps) {
+  const recordStepView = useMutation(api.steps.recordStepView);
   const primaryVideo = step.videos[0];
   const hasVariations = relatedSteps.length > 0;
   const tags = [
@@ -34,6 +41,15 @@ export function FeedStepCard({
     ...step.smartTags,
     ...step.artists,
   ];
+
+  async function handleViewed() {
+    if (hasViewedStepThisLoad(step._id)) {
+      return;
+    }
+
+    markStepViewedThisLoad(step._id);
+    await recordStepView({ id: step._id });
+  }
 
   return (
     <article
@@ -61,6 +77,7 @@ export function FeedStepCard({
               autoPlay={typeof IntersectionObserver !== "undefined"}
               enableFullSize
               ariaLabel={`${step.name} video`}
+              onViewed={handleViewed}
             />
           ) : null}
         </div>
@@ -100,7 +117,11 @@ export function FeedStepCard({
               {relatedSteps.length}
             </button>
           ) : null}
-          <StepActions stepId={step._id} stepName={step.name} />
+          <RecordPracticeButton
+            stepId={step._id}
+            stepName={step.name}
+            practiceRecords={step.practiceRecords}
+          />
           <button
             type="button"
             aria-label={`Edit ${step.name}`}

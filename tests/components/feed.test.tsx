@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StepsFeed } from "@/components/feed/steps-feed";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { startOfLocalDay } from "@/lib/domain/dates";
+import { resetViewedStepsForTests } from "@/lib/feed/viewed-steps-memory";
 
 const mocks = vi.hoisted(() => ({
   recordPractice: vi.fn(),
@@ -53,11 +55,13 @@ function step(overrides: Partial<Doc<"steps">> = {}): Doc<"steps"> {
 }
 
 vi.mock("convex/react", () => ({
-  useMutation: () => mocks.recordPractice,
+  useMutation: () => (args: { id: string; record?: unknown }) =>
+    args.record ? mocks.recordPractice(args) : mocks.recordStepView(args),
 }));
 
 describe("StepsFeed", () => {
   beforeEach(() => {
+    resetViewedStepsForTests();
     mocks.recordPractice.mockReset();
     mocks.recordPractice.mockResolvedValue("step-1");
     mocks.recordStepView.mockReset();
@@ -165,4 +169,59 @@ describe("StepsFeed", () => {
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     expect(mocks.openEdit).toHaveBeenCalledWith("step-main");
   });
+
+  it("records a video view once per step for the current app load", async () => {
+    const steps = [
+      step({ _id: stepId("step-main"), identifier: 1, name: "Shadow turn" }),
+    ];
+
+    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
+
+    const video = screen.getByLabelText("Shadow turn video");
+    Object.defineProperty(video, "duration", {
+      configurable: true,
+      value: 10,
+    });
+
+    fireTimeUpdate(video, 8);
+    fireTimeUpdate(video, 0.5);
+    fireTimeUpdate(video, 8.5);
+
+    await waitFor(() =>
+      expect(mocks.recordStepView).toHaveBeenCalledWith({ id: "step-main" }),
+    );
+    expect(mocks.recordStepView).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows practiced state and blocks duplicate practice clicks", async () => {
+    const user = userEvent.setup();
+    const todayStart = startOfLocalDay(Date.now());
+    const steps = [
+      step({
+        _id: stepId("step-main"),
+        identifier: 1,
+        name: "Shadow turn",
+        practiceRecords: [{ date: todayStart + 1, startOfDay: todayStart }],
+      }),
+    ];
+
+    render(<StepsFeed steps={steps} onEditStep={mocks.openEdit} />);
+
+    const card = screen.getByRole("article", { name: "Shadow turn" });
+    const button = within(card).getByRole("button", {
+      name: "Practiced Shadow turn today",
+    });
+
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(mocks.recordPractice).not.toHaveBeenCalled();
+  });
 });
+
+function fireTimeUpdate(video: HTMLElement, currentTime: number) {
+  Object.defineProperty(video, "currentTime", {
+    configurable: true,
+    value: currentTime,
+  });
+  video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+}
