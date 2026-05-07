@@ -6,3 +6,5 @@ coverage/
 .env
 *.tsbuildinfo
 convex/_generated/
+backups/
+.DS_Store
