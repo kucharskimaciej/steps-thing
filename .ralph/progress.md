@@ -6,6 +6,44 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
+Thread:
+Run: 20260507-200253-24281 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 2818db4 feat(video): add upload hashing flow
+- Post-commit status: clean after final progress commit
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+  - Command: dev-browser `/video-upload-harness` temporary route -> PASS
+- Files changed:
+  - .env.example
+  - app/(authenticated)/steps/new/page.tsx
+  - components/video/step-video-upload-field.tsx
+  - components/video/video-upload-input.tsx
+  - convex/_generated/api.d.ts
+  - convex/videoStorage.ts
+  - convex/videoStorageActions.ts
+  - lib/video/hash-file.ts
+  - lib/video/storage-client.ts
+  - lib/video/storage-key.ts
+  - tests/video/hash-file.test.ts
+  - tests/video/storage-client.test.ts
+  - tests/video/video-upload-input.test.tsx
+- What was implemented
+  Sampled 512 KiB chunk hashing, same-form duplicate prevention, owner-scoped existing-hash lookup, signed GCS upload URL action, owner-scoped storage keys, reusable video upload field on create step, and helper/component tests.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep hashing and upload decision helpers framework-free; wire Convex only in the field component.
+  - Gotchas encountered: protected `/steps/new` could not render in standalone browser because local Clerk keys cause a redirect loop; temporary public harness verified the upload control.
+  - Useful context: signed upload env needs `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
+---
+
 ## [2026-05-07 19:55:08 +0200] - S02-04-create-migration-and-backfill-tooling: Create Migration And Backfill Tooling
 Thread:
 Run: 20260507-194102-61024 (iteration 1)
