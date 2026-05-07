@@ -78046,3 +78046,2500 @@ index 0000000000000000000000000000000000000000..b4f7552b5aecee7a79e3fbce286aad86
 +  });
 +});
 
+exec
+/bin/zsh -lc 'git status --porcelain=v1 && git add -A && git commit -m "chore(ralph): record video upload run"' in /Users/maciejkucharski/work/steps-thing
+diff --git a/.env.example b/.env.example
+index c1c02063e06ee0ab1391b3397f4d6529fe84b491..acaecc7f964e59b02765622c8c83932302568bc7
+--- a/.env.example
++++ b/.env.example
+@@ -18,3 +18,8 @@
+ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/feed
+ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/feed
++
++# Google Cloud Storage signed video uploads.
++GCS_BUCKET_NAME=your-video-bucket
++GCS_CLIENT_EMAIL=service-account@project.iam.gserviceaccount.com
++GCS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index f1eef7615ca5f304db06e597160cf8cba1ee3754..f723a33b08bd9b16f01fa330eb8947a44fa028a7
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,44 @@
+ 
+ ---
+ 
++## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
++Thread:
++Run: 20260507-200253-24281 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 2818db4 feat(video): add upload hashing flow
++- Post-commit status: clean after final progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: dev-browser `/video-upload-harness` temporary route -> PASS
++- Files changed:
++  - .env.example
++  - app/(authenticated)/steps/new/page.tsx
++  - components/video/step-video-upload-field.tsx
++  - components/video/video-upload-input.tsx
++  - convex/_generated/api.d.ts
++  - convex/videoStorage.ts
++  - convex/videoStorageActions.ts
++  - lib/video/hash-file.ts
++  - lib/video/storage-client.ts
++  - lib/video/storage-key.ts
++  - tests/video/hash-file.test.ts
++  - tests/video/storage-client.test.ts
++  - tests/video/video-upload-input.test.tsx
++- What was implemented
++  Sampled 512 KiB chunk hashing, same-form duplicate prevention, owner-scoped existing-hash lookup, signed GCS upload URL action, owner-scoped storage keys, reusable video upload field on create step, and helper/component tests.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep hashing and upload decision helpers framework-free; wire Convex only in the field component.
++  - Gotchas encountered: protected `/steps/new` could not render in standalone browser because local Clerk keys cause a redirect loop; temporary public harness verified the upload control.
++  - Useful context: signed upload env needs `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
++---
++
+ ## [2026-05-07 19:55:08 +0200] - S02-04-create-migration-and-backfill-tooling: Create Migration And Backfill Tooling
+ Thread:
+ Run: 20260507-194102-61024 (iteration 1)
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index 2253cffa7e8f32bae4c7934c20c039d71e2e6d64..be33f16485c441bb2c4a6ec020134da651928f60
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,10 +1,17 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
+ 
+ export default function NewStepPage() {
+   return (
+-    <PlaceholderPage
+-      title="Create Step"
+-      description="Step creation placeholder. Form validation, video upload, and smart tags are implemented in later tasks."
+-    />
++    <main className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col gap-6 px-6 py-12">
++      <div>
++        <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++          Steps
++        </p>
++        <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
++      </div>
++      <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++        <StepVideoUploadField />
++      </section>
++    </main>
+   );
+ }
+diff --git a/components/video/step-video-upload-field.tsx b/components/video/step-video-upload-field.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..21e0a4bd2292785b9afa393fa39c04690481647e
+--- /dev/null
++++ b/components/video/step-video-upload-field.tsx
+@@ -0,0 +1,86 @@
++"use client";
++
++import { useAction, useConvex } from "convex/react";
++import { useState } from "react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { VideoUploadInput } from "./video-upload-input";
++import type {
++  ExistingVideoMatch,
++  StepVideo,
++  UploadedStepVideo,
++} from "@/lib/video/storage-client";
++
++type StepVideoUploadFieldProps = {
++  initialVideos?: StepVideo[];
++  currentStepId?: Id<"steps">;
++  onVideosChange?: (videos: StepVideo[]) => void;
++};
++
++export function StepVideoUploadField({
++  initialVideos = [],
++  currentStepId,
++  onVideosChange,
++}: StepVideoUploadFieldProps) {
++  const convex = useConvex();
++  const requestUpload = useAction(api.videoStorageActions.createUploadUrl);
++  const [videos, setVideos] = useState(initialVideos);
++  const [touched, setTouched] = useState(false);
++  const [duplicate, setDuplicate] = useState<UploadedStepVideo["duplicateOf"]>();
++  const [error, setError] = useState("");
++
++  function handleSelect(nextVideos: StepVideo[], selected: UploadedStepVideo) {
++    setVideos(nextVideos);
++    setDuplicate(selected.duplicateOf);
++    onVideosChange?.(nextVideos);
++  }
++
++  async function findExistingByHash(hash: string): Promise<ExistingVideoMatch | null> {
++    const matches = await convex.query(api.videoStorage.findExistingVideosByHash, {
++      hashes: [hash],
++      excludeStepId: currentStepId,
++    });
++
++    return matches[0] ?? null;
++  }
++
++  return (
++    <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++      <div>
++        <h2 id="videos-heading" className="text-base font-semibold">
++          Videos
++        </h2>
++        {touched && videos.length === 0 ? (
++          <p className="mt-1 text-sm text-red-700">Add at least one video.</p>
++        ) : null}
++        {duplicate ? (
++          <p className="mt-1 text-sm text-red-700">
++            Duplicate of {duplicate.stepName}
++          </p>
++        ) : null}
++        {error ? <p className="mt-1 text-sm text-red-700">{error}</p> : null}
++      </div>
++      <VideoUploadInput
++        videos={videos}
++        existingMatches={[]}
++        onSelect={handleSelect}
++        onTouched={() => setTouched(true)}
++        findExistingByHash={findExistingByHash}
++        requestUpload={requestUpload}
++        onError={setError}
++      />
++      {videos.length > 0 ? (
++        <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++          {videos.map((video) => (
++            <li key={video.hash} className="px-3 py-2 text-sm">
++              <span className="font-medium">{video.hash.slice(0, 12)}</span>
++              <span className="ml-2 text-[var(--muted-foreground)]">
++                {video.storageKey}
++              </span>
++            </li>
++          ))}
++        </ul>
++      ) : null}
++    </section>
++  );
++}
+diff --git a/components/video/video-upload-input.tsx b/components/video/video-upload-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e54ad31fc1b45101e48a7c033e6ce3ecd9723feb
+--- /dev/null
++++ b/components/video/video-upload-input.tsx
+@@ -0,0 +1,123 @@
++"use client";
++
++import { Upload } from "lucide-react";
++import { useId, useState } from "react";
++import { hashVideoFile } from "@/lib/video/hash-file";
++import {
++  addVideoSelection,
++  type ExistingVideoMatch,
++  type StepVideo,
++  type UploadedStepVideo,
++  uploadVideoForStep,
++} from "@/lib/video/storage-client";
++
++type VideoUploadInputProps = {
++  videos: StepVideo[];
++  existingMatches: ExistingVideoMatch[];
++  onSelect: (videos: StepVideo[], selected: UploadedStepVideo) => void;
++  onTouched: () => void;
++  findExistingByHash?: (hash: string) => Promise<ExistingVideoMatch | null>;
++  requestUpload?: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<{ uploadUrl: string; storageKey: string }>;
++  onError?: (message: string) => void;
++};
++
++export function VideoUploadInput({
++  videos,
++  existingMatches,
++  onSelect,
++  onTouched,
++  findExistingByHash,
++  requestUpload,
++  onError,
++}: VideoUploadInputProps) {
++  const inputId = useId();
++  const [isBusy, setIsBusy] = useState(false);
++  const [status, setStatus] = useState("");
++
++  async function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
++    onTouched();
++    const file = event.target.files?.[0] ?? null;
++    event.currentTarget.value = "";
++
++    if (!file) {
++      return;
++    }
++
++    setIsBusy(true);
++    setStatus("Hashing video");
++
++    try {
++      const hash = await hashVideoFile(file);
++
++      if (videos.some((video) => video.hash === hash)) {
++        setStatus("Already selected");
++        return;
++      }
++
++      const existing =
++        existingMatches.find((match) => match.hash === hash) ??
++        (findExistingByHash ? await findExistingByHash(hash) : null);
++
++      if (!existing && !requestUpload) {
++        throw new Error("Video upload is not configured");
++      }
++
++      setStatus(existing ? "Reusing existing video" : "Uploading video");
++
++      const selected = await uploadVideoForStep({
++        file,
++        hash,
++        existing,
++        requestUpload: requestUpload ?? missingUploadTarget,
++      });
++      const next = addVideoSelection(videos, selected);
++
++      if (next.added) {
++        onSelect(next.videos, selected);
++      }
++
++      setStatus(
++        selected.duplicateOf
++          ? `Duplicate of ${selected.duplicateOf.stepName}`
++          : "Video ready",
++      );
++    } catch (error) {
++      const message = error instanceof Error ? error.message : "Video upload failed";
++      setStatus(message);
++      onError?.(message);
++    } finally {
++      setIsBusy(false);
++    }
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label
++        htmlFor={inputId}
++        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-medium shadow-sm"
++      >
++        <Upload size={16} aria-hidden="true" />
++        Add video
++      </label>
++      <input
++        id={inputId}
++        className="sr-only"
++        type="file"
++        accept="video/*"
++        disabled={isBusy}
++        onClick={onTouched}
++        onChange={handleChange}
++      />
++      <p className="min-h-5 text-sm text-[var(--muted-foreground)]" aria-live="polite">
++        {status}
++      </p>
++    </div>
++  );
++}
++
++async function missingUploadTarget(): Promise<never> {
++  throw new Error("Video upload is not configured");
++}
+diff --git a/convex/videoStorage.ts b/convex/videoStorage.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..55913d4aa61f08ddd5b646467115a8607c84bd72
+--- /dev/null
++++ b/convex/videoStorage.ts
+@@ -0,0 +1,36 @@
++import { v } from "convex/values";
++import { query } from "./_generated/server";
++import { requireUserId } from "./auth";
++
++export const findExistingVideosByHash = query({
++  args: {
++    hashes: v.array(v.string()),
++    excludeStepId: v.optional(v.id("steps")),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++    const requested = new Set(args.hashes);
++
++    if (requested.size === 0) {
++      return [];
++    }
++
++    const steps = await ctx.db
++      .query("steps")
++      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
++      .collect();
++
++    return steps.flatMap((step) =>
++      step._id === args.excludeStepId
++        ? []
++        : step.videos
++            .filter((video) => requested.has(video.hash))
++            .map((video) => ({
++              hash: video.hash,
++              storageKey: video.storageKey,
++              duplicateStepId: step._id,
++              duplicateStepName: step.name,
++            })),
++    );
++  },
++});
+diff --git a/convex/videoStorageActions.ts b/convex/videoStorageActions.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b42aeee4453ab14719e6c823e35e377ed8ba992
+--- /dev/null
++++ b/convex/videoStorageActions.ts
+@@ -0,0 +1,92 @@
++"use node";
++
++import { createSign } from "node:crypto";
++import { v } from "convex/values";
++import { action } from "./_generated/server";
++import { requireUserId } from "./auth";
++import { buildOwnerVideoStorageKey } from "../lib/video/storage-key";
++
++const uploadTtlSeconds = 15 * 60;
++
++export const createUploadUrl = action({
++  args: {
++    hash: v.string(),
++    contentType: v.string(),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++
++    if (!args.hash) {
++      throw new Error("Video hash is required");
++    }
++
++    if (args.contentType && !args.contentType.startsWith("video/")) {
++      throw new Error("Video upload content type must be video/*");
++    }
++
++    const bucket = requiredEnv("GCS_BUCKET_NAME");
++    const clientEmail = requiredEnv("GCS_CLIENT_EMAIL");
++    const privateKey = requiredEnv("GCS_PRIVATE_KEY").replace(/\\n/g, "\n");
++    const storageKey = buildOwnerVideoStorageKey(ownerId, args.hash);
++    const uploadUrl = createSignedPutUrl({
++      bucket,
++      clientEmail,
++      privateKey,
++      storageKey,
++      contentType: args.contentType || "video/mp4",
++      expires: Math.floor(Date.now() / 1000) + uploadTtlSeconds,
++    });
++
++    return { uploadUrl, storageKey };
++  },
++});
++
++function requiredEnv(name: string): string {
++  const value = process.env[name];
++
++  if (!value) {
++    throw new Error(`${name} is required`);
++  }
++
++  return value;
++}
++
++function createSignedPutUrl({
++  bucket,
++  clientEmail,
++  privateKey,
++  storageKey,
++  contentType,
++  expires,
++}: {
++  bucket: string;
++  clientEmail: string;
++  privateKey: string;
++  storageKey: string;
++  contentType: string;
++  expires: number;
++}) {
++  const host = "storage.googleapis.com";
++  const resource = `/${bucket}/${storageKey}`;
++  const escapedResource = resource
++    .split("/")
++    .map((part) => encodeURIComponent(part))
++    .join("/");
++  const stringToSign = [
++    "PUT",
++    "",
++    contentType,
++    expires.toString(),
++    resource,
++  ].join("\n");
++  const signer = createSign("RSA-SHA256");
++
++  signer.update(stringToSign);
++  signer.end();
++
++  const signature = encodeURIComponent(signer.sign(privateKey, "base64"));
++
++  return `https://${host}${escapedResource}?GoogleAccessId=${encodeURIComponent(
++    clientEmail,
++  )}&Expires=${expires}&Signature=${signature}`;
++}
+diff --git a/lib/video/hash-file.ts b/lib/video/hash-file.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2329eae4f5e46170c8746633a8ece99e347694c7
+--- /dev/null
++++ b/lib/video/hash-file.ts
+@@ -0,0 +1,49 @@
++export const VIDEO_HASH_CHUNK_SIZE = 512 * 1024;
++
++const samplingRatio = Math.E / Math.PI;
++
++export function sampledChunkIndexes(fileSize: number): number[] {
++  if (fileSize <= 0) {
++    return [];
++  }
++
++  const totalChunks = Math.ceil(fileSize / VIDEO_HASH_CHUNK_SIZE);
++  const samplingInterval = Math.max(
++    Math.round(samplingRatio * Math.sqrt(totalChunks)),
++    1,
++  );
++  const indexes: number[] = [];
++
++  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
++    if (chunkIndex % samplingInterval === 0) {
++      indexes.push(chunkIndex);
++    }
++  }
++
++  return indexes;
++}
++
++export async function hashVideoFile(file: File): Promise<string> {
++  const chunks = await Promise.all(
++    sampledChunkIndexes(file.size).map(async (chunkIndex) => {
++      const start = chunkIndex * VIDEO_HASH_CHUNK_SIZE;
++      const end = Math.min(start + VIDEO_HASH_CHUNK_SIZE, file.size);
++
++      return new Uint8Array(await file.slice(start, end).arrayBuffer());
++    }),
++  );
++  const sampledSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
++  const sampledBytes = new Uint8Array(sampledSize);
++  let offset = 0;
++
++  for (const chunk of chunks) {
++    sampledBytes.set(chunk, offset);
++    offset += chunk.byteLength;
++  }
++
++  const digest = await crypto.subtle.digest("SHA-256", sampledBytes);
++
++  return [...new Uint8Array(digest)]
++    .map((byte) => byte.toString(16).padStart(2, "0"))
++    .join("");
++}
+diff --git a/lib/video/storage-client.ts b/lib/video/storage-client.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6bb8886136d9b791b5101ef72c289efb0fda3df3
+--- /dev/null
++++ b/lib/video/storage-client.ts
+@@ -0,0 +1,95 @@
++export type StepVideo = {
++  hash: string;
++  storageKey: string;
++};
++
++export type ExistingVideoMatch = StepVideo & {
++  duplicateStepId?: string;
++  duplicateStepName?: string;
++};
++
++export type UploadedStepVideo = StepVideo & {
++  duplicateOf?: {
++    stepId: string;
++    stepName: string;
++  };
++};
++
++type UploadTarget = {
++  uploadUrl: string;
++  storageKey: string;
++};
++
++type UploadVideoForStepArgs = {
++  file: File;
++  hash: string;
++  existing: ExistingVideoMatch | null;
++  requestUpload: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<UploadTarget>;
++  upload?: (uploadUrl: string, file: File, contentType: string) => Promise<void>;
++};
++
++export { buildOwnerVideoStorageKey } from "./storage-key";
++
++export function addVideoSelection<T extends StepVideo>(
++  videos: T[],
++  candidate: T,
++):
++  | { videos: T[]; added: true; reason?: never }
++  | { videos: T[]; added: false; reason: "already-selected" } {
++  if (videos.some((video) => video.hash === candidate.hash)) {
++    return { videos, added: false, reason: "already-selected" };
++  }
++
++  return { videos: [...videos, candidate], added: true };
++}
++
++export async function putVideoFile(
++  uploadUrl: string,
++  file: File,
++  contentType: string,
++) {
++  const response = await fetch(uploadUrl, {
++    method: "PUT",
++    headers: { "Content-Type": contentType },
++    body: file,
++  });
++
++  if (!response.ok) {
++    throw new Error(`Video upload failed with status ${response.status}`);
++  }
++}
++
++export async function uploadVideoForStep({
++  file,
++  hash,
++  existing,
++  requestUpload,
++  upload = putVideoFile,
++}: UploadVideoForStepArgs): Promise<UploadedStepVideo> {
++  if (existing) {
++    return {
++      hash,
++      storageKey: existing.storageKey,
++      duplicateOf:
++        existing.duplicateStepId && existing.duplicateStepName
++          ? {
++              stepId: existing.duplicateStepId,
++              stepName: existing.duplicateStepName,
++            }
++          : undefined,
++    };
++  }
++
++  const contentType = file.type || "video/mp4";
++  const target = await requestUpload({ hash, contentType });
++
++  await upload(target.uploadUrl, file, contentType);
++
++  return {
++    hash,
++    storageKey: target.storageKey,
++  };
++}
+diff --git a/lib/video/storage-key.ts b/lib/video/storage-key.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..108ac5713abd0e9e61caae6b45a5ee4f6493e0a9
+--- /dev/null
++++ b/lib/video/storage-key.ts
+@@ -0,0 +1,3 @@
++export function buildOwnerVideoStorageKey(ownerId: string, hash: string): string {
++  return `videos/${encodeURIComponent(ownerId)}/${encodeURIComponent(hash)}`;
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/video/hash-file.test.ts b/tests/video/hash-file.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4c19b120750070503e7cd41c667f9dafcbebda2
+--- /dev/null
++++ b/tests/video/hash-file.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from "vitest";
++import {
++  VIDEO_HASH_CHUNK_SIZE,
++  hashVideoFile,
++  sampledChunkIndexes,
++} from "@/lib/video/hash-file";
++
++function videoFile(bytes: Uint8Array) {
++  const body = new ArrayBuffer(bytes.byteLength);
++
++  new Uint8Array(body).set(bytes);
++
++  return new File([body], "clip.mp4", { type: "video/mp4" });
++}
++
++describe("video file hashing", () => {
++  it("uses the required sampled chunk interval", () => {
++    expect(sampledChunkIndexes(0)).toEqual([]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE)).toEqual([0]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE * 16)).toEqual([
++      0, 3, 6, 9, 12, 15,
++    ]);
++  });
++
++  it("hashes only sampled chunks in chunk order", async () => {
++    const bytes = new Uint8Array(VIDEO_HASH_CHUNK_SIZE * 4);
++    bytes.fill(1, 0, VIDEO_HASH_CHUNK_SIZE);
++    bytes.fill(2, VIDEO_HASH_CHUNK_SIZE, VIDEO_HASH_CHUNK_SIZE * 2);
++    bytes.fill(3, VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3);
++    bytes.fill(4, VIDEO_HASH_CHUNK_SIZE * 3);
++
++    const hash = await hashVideoFile(videoFile(bytes));
++    const expected = await crypto.subtle.digest(
++      "SHA-256",
++      new Uint8Array([
++        ...bytes.slice(0, VIDEO_HASH_CHUNK_SIZE),
++        ...bytes.slice(VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3),
++      ]),
++    );
++
++    expect(hash).toBe(
++      [...new Uint8Array(expected)]
++        .map((byte) => byte.toString(16).padStart(2, "0"))
++        .join(""),
++    );
++  });
++});
+diff --git a/tests/video/storage-client.test.ts b/tests/video/storage-client.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4bb20db019fca799aa69204815589e2e0af262d
+--- /dev/null
++++ b/tests/video/storage-client.test.ts
+@@ -0,0 +1,91 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  addVideoSelection,
++  buildOwnerVideoStorageKey,
++  uploadVideoForStep,
++  type ExistingVideoMatch,
++} from "@/lib/video/storage-client";
++
++function fileWithHashName() {
++  return new File([new Uint8Array([1, 2, 3])], "clip.mp4", {
++    type: "video/mp4",
++  });
++}
++
++describe("video storage client helpers", () => {
++  it("builds owner-scoped object keys", () => {
++    expect(buildOwnerVideoStorageKey("user/a", "abc/123")).toBe(
++      "videos/user%2Fa/abc%2F123",
++    );
++  });
++
++  it("blocks same-form duplicate hashes", () => {
++    const current = [{ hash: "hash-a", storageKey: "videos/user/hash-a" }];
++
++    expect(addVideoSelection(current, current[0])).toEqual({
++      videos: current,
++      added: false,
++      reason: "already-selected",
++    });
++  });
++
++  it("reuses owner-scoped storage keys for existing hashes", async () => {
++    const existing: ExistingVideoMatch = {
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateStepId: "step-a",
++      duplicateStepName: "Existing step",
++    };
++    const upload = vi.fn();
++    const requestUpload = vi.fn();
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-a",
++        existing,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateOf: {
++        stepId: "step-a",
++        stepName: "Existing step",
++      },
++    });
++    expect(requestUpload).not.toHaveBeenCalled();
++    expect(upload).not.toHaveBeenCalled();
++  });
++
++  it("requests a signed URL before uploading new hashes", async () => {
++    const upload = vi.fn().mockResolvedValue(undefined);
++    const requestUpload = vi.fn().mockResolvedValue({
++      uploadUrl: "https://storage.googleapis.test/upload",
++      storageKey: "videos/user-a/hash-b",
++    });
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-b",
++        existing: null,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-b",
++      storageKey: "videos/user-a/hash-b",
++    });
++    expect(requestUpload).toHaveBeenCalledWith({
++      hash: "hash-b",
++      contentType: "video/mp4",
++    });
++    expect(upload).toHaveBeenCalledWith(
++      "https://storage.googleapis.test/upload",
++      expect.any(File),
++      "video/mp4",
++    );
++  });
++});
+diff --git a/tests/video/video-upload-input.test.tsx b/tests/video/video-upload-input.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4f7552b5aecee7a79e3fbce286aad86e2699d53
+--- /dev/null
++++ b/tests/video/video-upload-input.test.tsx
+@@ -0,0 +1,29 @@
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { VideoUploadInput } from "@/components/video/video-upload-input";
++
++describe("VideoUploadInput", () => {
++  it("accepts video files and marks cancelled selection as touched", async () => {
++    const user = userEvent.setup();
++    const onSelect = vi.fn();
++    const onTouched = vi.fn();
++
++    render(
++      <VideoUploadInput
++        videos={[]}
++        existingMatches={[]}
++        onSelect={onSelect}
++        onTouched={onTouched}
++      />,
++    );
++
++    const input = screen.getByLabelText("Add video");
++
++    expect(input).toHaveAttribute("accept", "video/*");
++
++    await user.upload(input, []);
++
++    expect(onTouched).toHaveBeenCalled();
++  });
++});
+
+ succeeded in 2404ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 77 files in 17ms. No fixes applied.
+[main 869d6a6] chore(ralph): record video upload run
+ 3 files changed, 6455 insertions(+)
+
+diff --git a/.env.example b/.env.example
+index c1c02063e06ee0ab1391b3397f4d6529fe84b491..acaecc7f964e59b02765622c8c83932302568bc7
+--- a/.env.example
++++ b/.env.example
+@@ -18,3 +18,8 @@
+ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/feed
+ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/feed
++
++# Google Cloud Storage signed video uploads.
++GCS_BUCKET_NAME=your-video-bucket
++GCS_CLIENT_EMAIL=service-account@project.iam.gserviceaccount.com
++GCS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index f1eef7615ca5f304db06e597160cf8cba1ee3754..f723a33b08bd9b16f01fa330eb8947a44fa028a7
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,44 @@
+ 
+ ---
+ 
++## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
++Thread:
++Run: 20260507-200253-24281 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 2818db4 feat(video): add upload hashing flow
++- Post-commit status: clean after final progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: dev-browser `/video-upload-harness` temporary route -> PASS
++- Files changed:
++  - .env.example
++  - app/(authenticated)/steps/new/page.tsx
++  - components/video/step-video-upload-field.tsx
++  - components/video/video-upload-input.tsx
++  - convex/_generated/api.d.ts
++  - convex/videoStorage.ts
++  - convex/videoStorageActions.ts
++  - lib/video/hash-file.ts
++  - lib/video/storage-client.ts
++  - lib/video/storage-key.ts
++  - tests/video/hash-file.test.ts
++  - tests/video/storage-client.test.ts
++  - tests/video/video-upload-input.test.tsx
++- What was implemented
++  Sampled 512 KiB chunk hashing, same-form duplicate prevention, owner-scoped existing-hash lookup, signed GCS upload URL action, owner-scoped storage keys, reusable video upload field on create step, and helper/component tests.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep hashing and upload decision helpers framework-free; wire Convex only in the field component.
++  - Gotchas encountered: protected `/steps/new` could not render in standalone browser because local Clerk keys cause a redirect loop; temporary public harness verified the upload control.
++  - Useful context: signed upload env needs `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
++---
++
+ ## [2026-05-07 19:55:08 +0200] - S02-04-create-migration-and-backfill-tooling: Create Migration And Backfill Tooling
+ Thread:
+ Run: 20260507-194102-61024 (iteration 1)
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index 2253cffa7e8f32bae4c7934c20c039d71e2e6d64..be33f16485c441bb2c4a6ec020134da651928f60
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,10 +1,17 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
+ 
+ export default function NewStepPage() {
+   return (
+-    <PlaceholderPage
+-      title="Create Step"
+-      description="Step creation placeholder. Form validation, video upload, and smart tags are implemented in later tasks."
+-    />
++    <main className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col gap-6 px-6 py-12">
++      <div>
++        <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++          Steps
++        </p>
++        <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
++      </div>
++      <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++        <StepVideoUploadField />
++      </section>
++    </main>
+   );
+ }
+diff --git a/components/video/step-video-upload-field.tsx b/components/video/step-video-upload-field.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..21e0a4bd2292785b9afa393fa39c04690481647e
+--- /dev/null
++++ b/components/video/step-video-upload-field.tsx
+@@ -0,0 +1,86 @@
++"use client";
++
++import { useAction, useConvex } from "convex/react";
++import { useState } from "react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { VideoUploadInput } from "./video-upload-input";
++import type {
++  ExistingVideoMatch,
++  StepVideo,
++  UploadedStepVideo,
++} from "@/lib/video/storage-client";
++
++type StepVideoUploadFieldProps = {
++  initialVideos?: StepVideo[];
++  currentStepId?: Id<"steps">;
++  onVideosChange?: (videos: StepVideo[]) => void;
++};
++
++export function StepVideoUploadField({
++  initialVideos = [],
++  currentStepId,
++  onVideosChange,
++}: StepVideoUploadFieldProps) {
++  const convex = useConvex();
++  const requestUpload = useAction(api.videoStorageActions.createUploadUrl);
++  const [videos, setVideos] = useState(initialVideos);
++  const [touched, setTouched] = useState(false);
++  const [duplicate, setDuplicate] = useState<UploadedStepVideo["duplicateOf"]>();
++  const [error, setError] = useState("");
++
++  function handleSelect(nextVideos: StepVideo[], selected: UploadedStepVideo) {
++    setVideos(nextVideos);
++    setDuplicate(selected.duplicateOf);
++    onVideosChange?.(nextVideos);
++  }
++
++  async function findExistingByHash(hash: string): Promise<ExistingVideoMatch | null> {
++    const matches = await convex.query(api.videoStorage.findExistingVideosByHash, {
++      hashes: [hash],
++      excludeStepId: currentStepId,
++    });
++
++    return matches[0] ?? null;
++  }
++
++  return (
++    <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++      <div>
++        <h2 id="videos-heading" className="text-base font-semibold">
++          Videos
++        </h2>
++        {touched && videos.length === 0 ? (
++          <p className="mt-1 text-sm text-red-700">Add at least one video.</p>
++        ) : null}
++        {duplicate ? (
++          <p className="mt-1 text-sm text-red-700">
++            Duplicate of {duplicate.stepName}
++          </p>
++        ) : null}
++        {error ? <p className="mt-1 text-sm text-red-700">{error}</p> : null}
++      </div>
++      <VideoUploadInput
++        videos={videos}
++        existingMatches={[]}
++        onSelect={handleSelect}
++        onTouched={() => setTouched(true)}
++        findExistingByHash={findExistingByHash}
++        requestUpload={requestUpload}
++        onError={setError}
++      />
++      {videos.length > 0 ? (
++        <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++          {videos.map((video) => (
++            <li key={video.hash} className="px-3 py-2 text-sm">
++              <span className="font-medium">{video.hash.slice(0, 12)}</span>
++              <span className="ml-2 text-[var(--muted-foreground)]">
++                {video.storageKey}
++              </span>
++            </li>
++          ))}
++        </ul>
++      ) : null}
++    </section>
++  );
++}
+diff --git a/components/video/video-upload-input.tsx b/components/video/video-upload-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e54ad31fc1b45101e48a7c033e6ce3ecd9723feb
+--- /dev/null
++++ b/components/video/video-upload-input.tsx
+@@ -0,0 +1,123 @@
++"use client";
++
++import { Upload } from "lucide-react";
++import { useId, useState } from "react";
++import { hashVideoFile } from "@/lib/video/hash-file";
++import {
++  addVideoSelection,
++  type ExistingVideoMatch,
++  type StepVideo,
++  type UploadedStepVideo,
++  uploadVideoForStep,
++} from "@/lib/video/storage-client";
++
++type VideoUploadInputProps = {
++  videos: StepVideo[];
++  existingMatches: ExistingVideoMatch[];
++  onSelect: (videos: StepVideo[], selected: UploadedStepVideo) => void;
++  onTouched: () => void;
++  findExistingByHash?: (hash: string) => Promise<ExistingVideoMatch | null>;
++  requestUpload?: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<{ uploadUrl: string; storageKey: string }>;
++  onError?: (message: string) => void;
++};
++
++export function VideoUploadInput({
++  videos,
++  existingMatches,
++  onSelect,
++  onTouched,
++  findExistingByHash,
++  requestUpload,
++  onError,
++}: VideoUploadInputProps) {
++  const inputId = useId();
++  const [isBusy, setIsBusy] = useState(false);
++  const [status, setStatus] = useState("");
++
++  async function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
++    onTouched();
++    const file = event.target.files?.[0] ?? null;
++    event.currentTarget.value = "";
++
++    if (!file) {
++      return;
++    }
++
++    setIsBusy(true);
++    setStatus("Hashing video");
++
++    try {
++      const hash = await hashVideoFile(file);
++
++      if (videos.some((video) => video.hash === hash)) {
++        setStatus("Already selected");
++        return;
++      }
++
++      const existing =
++        existingMatches.find((match) => match.hash === hash) ??
++        (findExistingByHash ? await findExistingByHash(hash) : null);
++
++      if (!existing && !requestUpload) {
++        throw new Error("Video upload is not configured");
++      }
++
++      setStatus(existing ? "Reusing existing video" : "Uploading video");
++
++      const selected = await uploadVideoForStep({
++        file,
++        hash,
++        existing,
++        requestUpload: requestUpload ?? missingUploadTarget,
++      });
++      const next = addVideoSelection(videos, selected);
++
++      if (next.added) {
++        onSelect(next.videos, selected);
++      }
++
++      setStatus(
++        selected.duplicateOf
++          ? `Duplicate of ${selected.duplicateOf.stepName}`
++          : "Video ready",
++      );
++    } catch (error) {
++      const message = error instanceof Error ? error.message : "Video upload failed";
++      setStatus(message);
++      onError?.(message);
++    } finally {
++      setIsBusy(false);
++    }
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label
++        htmlFor={inputId}
++        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-medium shadow-sm"
++      >
++        <Upload size={16} aria-hidden="true" />
++        Add video
++      </label>
++      <input
++        id={inputId}
++        className="sr-only"
++        type="file"
++        accept="video/*"
++        disabled={isBusy}
++        onClick={onTouched}
++        onChange={handleChange}
++      />
++      <p className="min-h-5 text-sm text-[var(--muted-foreground)]" aria-live="polite">
++        {status}
++      </p>
++    </div>
++  );
++}
++
++async function missingUploadTarget(): Promise<never> {
++  throw new Error("Video upload is not configured");
++}
+diff --git a/convex/videoStorage.ts b/convex/videoStorage.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..55913d4aa61f08ddd5b646467115a8607c84bd72
+--- /dev/null
++++ b/convex/videoStorage.ts
+@@ -0,0 +1,36 @@
++import { v } from "convex/values";
++import { query } from "./_generated/server";
++import { requireUserId } from "./auth";
++
++export const findExistingVideosByHash = query({
++  args: {
++    hashes: v.array(v.string()),
++    excludeStepId: v.optional(v.id("steps")),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++    const requested = new Set(args.hashes);
++
++    if (requested.size === 0) {
++      return [];
++    }
++
++    const steps = await ctx.db
++      .query("steps")
++      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
++      .collect();
++
++    return steps.flatMap((step) =>
++      step._id === args.excludeStepId
++        ? []
++        : step.videos
++            .filter((video) => requested.has(video.hash))
++            .map((video) => ({
++              hash: video.hash,
++              storageKey: video.storageKey,
++              duplicateStepId: step._id,
++              duplicateStepName: step.name,
++            })),
++    );
++  },
++});
+diff --git a/convex/videoStorageActions.ts b/convex/videoStorageActions.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b42aeee4453ab14719e6c823e35e377ed8ba992
+--- /dev/null
++++ b/convex/videoStorageActions.ts
+@@ -0,0 +1,92 @@
++"use node";
++
++import { createSign } from "node:crypto";
++import { v } from "convex/values";
++import { action } from "./_generated/server";
++import { requireUserId } from "./auth";
++import { buildOwnerVideoStorageKey } from "../lib/video/storage-key";
++
++const uploadTtlSeconds = 15 * 60;
++
++export const createUploadUrl = action({
++  args: {
++    hash: v.string(),
++    contentType: v.string(),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++
++    if (!args.hash) {
++      throw new Error("Video hash is required");
++    }
++
++    if (args.contentType && !args.contentType.startsWith("video/")) {
++      throw new Error("Video upload content type must be video/*");
++    }
++
++    const bucket = requiredEnv("GCS_BUCKET_NAME");
++    const clientEmail = requiredEnv("GCS_CLIENT_EMAIL");
++    const privateKey = requiredEnv("GCS_PRIVATE_KEY").replace(/\\n/g, "\n");
++    const storageKey = buildOwnerVideoStorageKey(ownerId, args.hash);
++    const uploadUrl = createSignedPutUrl({
++      bucket,
++      clientEmail,
++      privateKey,
++      storageKey,
++      contentType: args.contentType || "video/mp4",
++      expires: Math.floor(Date.now() / 1000) + uploadTtlSeconds,
++    });
++
++    return { uploadUrl, storageKey };
++  },
++});
++
++function requiredEnv(name: string): string {
++  const value = process.env[name];
++
++  if (!value) {
++    throw new Error(`${name} is required`);
++  }
++
++  return value;
++}
++
++function createSignedPutUrl({
++  bucket,
++  clientEmail,
++  privateKey,
++  storageKey,
++  contentType,
++  expires,
++}: {
++  bucket: string;
++  clientEmail: string;
++  privateKey: string;
++  storageKey: string;
++  contentType: string;
++  expires: number;
++}) {
++  const host = "storage.googleapis.com";
++  const resource = `/${bucket}/${storageKey}`;
++  const escapedResource = resource
++    .split("/")
++    .map((part) => encodeURIComponent(part))
++    .join("/");
++  const stringToSign = [
++    "PUT",
++    "",
++    contentType,
++    expires.toString(),
++    resource,
++  ].join("\n");
++  const signer = createSign("RSA-SHA256");
++
++  signer.update(stringToSign);
++  signer.end();
++
++  const signature = encodeURIComponent(signer.sign(privateKey, "base64"));
++
++  return `https://${host}${escapedResource}?GoogleAccessId=${encodeURIComponent(
++    clientEmail,
++  )}&Expires=${expires}&Signature=${signature}`;
++}
+diff --git a/lib/video/hash-file.ts b/lib/video/hash-file.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2329eae4f5e46170c8746633a8ece99e347694c7
+--- /dev/null
++++ b/lib/video/hash-file.ts
+@@ -0,0 +1,49 @@
++export const VIDEO_HASH_CHUNK_SIZE = 512 * 1024;
++
++const samplingRatio = Math.E / Math.PI;
++
++export function sampledChunkIndexes(fileSize: number): number[] {
++  if (fileSize <= 0) {
++    return [];
++  }
++
++  const totalChunks = Math.ceil(fileSize / VIDEO_HASH_CHUNK_SIZE);
++  const samplingInterval = Math.max(
++    Math.round(samplingRatio * Math.sqrt(totalChunks)),
++    1,
++  );
++  const indexes: number[] = [];
++
++  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
++    if (chunkIndex % samplingInterval === 0) {
++      indexes.push(chunkIndex);
++    }
++  }
++
++  return indexes;
++}
++
++export async function hashVideoFile(file: File): Promise<string> {
++  const chunks = await Promise.all(
++    sampledChunkIndexes(file.size).map(async (chunkIndex) => {
++      const start = chunkIndex * VIDEO_HASH_CHUNK_SIZE;
++      const end = Math.min(start + VIDEO_HASH_CHUNK_SIZE, file.size);
++
++      return new Uint8Array(await file.slice(start, end).arrayBuffer());
++    }),
++  );
++  const sampledSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
++  const sampledBytes = new Uint8Array(sampledSize);
++  let offset = 0;
++
++  for (const chunk of chunks) {
++    sampledBytes.set(chunk, offset);
++    offset += chunk.byteLength;
++  }
++
++  const digest = await crypto.subtle.digest("SHA-256", sampledBytes);
++
++  return [...new Uint8Array(digest)]
++    .map((byte) => byte.toString(16).padStart(2, "0"))
++    .join("");
++}
+diff --git a/lib/video/storage-client.ts b/lib/video/storage-client.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6bb8886136d9b791b5101ef72c289efb0fda3df3
+--- /dev/null
++++ b/lib/video/storage-client.ts
+@@ -0,0 +1,95 @@
++export type StepVideo = {
++  hash: string;
++  storageKey: string;
++};
++
++export type ExistingVideoMatch = StepVideo & {
++  duplicateStepId?: string;
++  duplicateStepName?: string;
++};
++
++export type UploadedStepVideo = StepVideo & {
++  duplicateOf?: {
++    stepId: string;
++    stepName: string;
++  };
++};
++
++type UploadTarget = {
++  uploadUrl: string;
++  storageKey: string;
++};
++
++type UploadVideoForStepArgs = {
++  file: File;
++  hash: string;
++  existing: ExistingVideoMatch | null;
++  requestUpload: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<UploadTarget>;
++  upload?: (uploadUrl: string, file: File, contentType: string) => Promise<void>;
++};
++
++export { buildOwnerVideoStorageKey } from "./storage-key";
++
++export function addVideoSelection<T extends StepVideo>(
++  videos: T[],
++  candidate: T,
++):
++  | { videos: T[]; added: true; reason?: never }
++  | { videos: T[]; added: false; reason: "already-selected" } {
++  if (videos.some((video) => video.hash === candidate.hash)) {
++    return { videos, added: false, reason: "already-selected" };
++  }
++
++  return { videos: [...videos, candidate], added: true };
++}
++
++export async function putVideoFile(
++  uploadUrl: string,
++  file: File,
++  contentType: string,
++) {
++  const response = await fetch(uploadUrl, {
++    method: "PUT",
++    headers: { "Content-Type": contentType },
++    body: file,
++  });
++
++  if (!response.ok) {
++    throw new Error(`Video upload failed with status ${response.status}`);
++  }
++}
++
++export async function uploadVideoForStep({
++  file,
++  hash,
++  existing,
++  requestUpload,
++  upload = putVideoFile,
++}: UploadVideoForStepArgs): Promise<UploadedStepVideo> {
++  if (existing) {
++    return {
++      hash,
++      storageKey: existing.storageKey,
++      duplicateOf:
++        existing.duplicateStepId && existing.duplicateStepName
++          ? {
++              stepId: existing.duplicateStepId,
++              stepName: existing.duplicateStepName,
++            }
++          : undefined,
++    };
++  }
++
++  const contentType = file.type || "video/mp4";
++  const target = await requestUpload({ hash, contentType });
++
++  await upload(target.uploadUrl, file, contentType);
++
++  return {
++    hash,
++    storageKey: target.storageKey,
++  };
++}
+diff --git a/lib/video/storage-key.ts b/lib/video/storage-key.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..108ac5713abd0e9e61caae6b45a5ee4f6493e0a9
+--- /dev/null
++++ b/lib/video/storage-key.ts
+@@ -0,0 +1,3 @@
++export function buildOwnerVideoStorageKey(ownerId: string, hash: string): string {
++  return `videos/${encodeURIComponent(ownerId)}/${encodeURIComponent(hash)}`;
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/video/hash-file.test.ts b/tests/video/hash-file.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4c19b120750070503e7cd41c667f9dafcbebda2
+--- /dev/null
++++ b/tests/video/hash-file.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from "vitest";
++import {
++  VIDEO_HASH_CHUNK_SIZE,
++  hashVideoFile,
++  sampledChunkIndexes,
++} from "@/lib/video/hash-file";
++
++function videoFile(bytes: Uint8Array) {
++  const body = new ArrayBuffer(bytes.byteLength);
++
++  new Uint8Array(body).set(bytes);
++
++  return new File([body], "clip.mp4", { type: "video/mp4" });
++}
++
++describe("video file hashing", () => {
++  it("uses the required sampled chunk interval", () => {
++    expect(sampledChunkIndexes(0)).toEqual([]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE)).toEqual([0]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE * 16)).toEqual([
++      0, 3, 6, 9, 12, 15,
++    ]);
++  });
++
++  it("hashes only sampled chunks in chunk order", async () => {
++    const bytes = new Uint8Array(VIDEO_HASH_CHUNK_SIZE * 4);
++    bytes.fill(1, 0, VIDEO_HASH_CHUNK_SIZE);
++    bytes.fill(2, VIDEO_HASH_CHUNK_SIZE, VIDEO_HASH_CHUNK_SIZE * 2);
++    bytes.fill(3, VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3);
++    bytes.fill(4, VIDEO_HASH_CHUNK_SIZE * 3);
++
++    const hash = await hashVideoFile(videoFile(bytes));
++    const expected = await crypto.subtle.digest(
++      "SHA-256",
++      new Uint8Array([
++        ...bytes.slice(0, VIDEO_HASH_CHUNK_SIZE),
++        ...bytes.slice(VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3),
++      ]),
++    );
++
++    expect(hash).toBe(
++      [...new Uint8Array(expected)]
++        .map((byte) => byte.toString(16).padStart(2, "0"))
++        .join(""),
++    );
++  });
++});
+diff --git a/tests/video/storage-client.test.ts b/tests/video/storage-client.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4bb20db019fca799aa69204815589e2e0af262d
+--- /dev/null
++++ b/tests/video/storage-client.test.ts
+@@ -0,0 +1,91 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  addVideoSelection,
++  buildOwnerVideoStorageKey,
++  uploadVideoForStep,
++  type ExistingVideoMatch,
++} from "@/lib/video/storage-client";
++
++function fileWithHashName() {
++  return new File([new Uint8Array([1, 2, 3])], "clip.mp4", {
++    type: "video/mp4",
++  });
++}
++
++describe("video storage client helpers", () => {
++  it("builds owner-scoped object keys", () => {
++    expect(buildOwnerVideoStorageKey("user/a", "abc/123")).toBe(
++      "videos/user%2Fa/abc%2F123",
++    );
++  });
++
++  it("blocks same-form duplicate hashes", () => {
++    const current = [{ hash: "hash-a", storageKey: "videos/user/hash-a" }];
++
++    expect(addVideoSelection(current, current[0])).toEqual({
++      videos: current,
++      added: false,
++      reason: "already-selected",
++    });
++  });
++
++  it("reuses owner-scoped storage keys for existing hashes", async () => {
++    const existing: ExistingVideoMatch = {
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateStepId: "step-a",
++      duplicateStepName: "Existing step",
++    };
++    const upload = vi.fn();
++    const requestUpload = vi.fn();
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-a",
++        existing,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateOf: {
++        stepId: "step-a",
++        stepName: "Existing step",
++      },
++    });
++    expect(requestUpload).not.toHaveBeenCalled();
++    expect(upload).not.toHaveBeenCalled();
++  });
++
++  it("requests a signed URL before uploading new hashes", async () => {
++    const upload = vi.fn().mockResolvedValue(undefined);
++    const requestUpload = vi.fn().mockResolvedValue({
++      uploadUrl: "https://storage.googleapis.test/upload",
++      storageKey: "videos/user-a/hash-b",
++    });
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-b",
++        existing: null,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-b",
++      storageKey: "videos/user-a/hash-b",
++    });
++    expect(requestUpload).toHaveBeenCalledWith({
++      hash: "hash-b",
++      contentType: "video/mp4",
++    });
++    expect(upload).toHaveBeenCalledWith(
++      "https://storage.googleapis.test/upload",
++      expect.any(File),
++      "video/mp4",
++    );
++  });
++});
+diff --git a/tests/video/video-upload-input.test.tsx b/tests/video/video-upload-input.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4f7552b5aecee7a79e3fbce286aad86e2699d53
+--- /dev/null
++++ b/tests/video/video-upload-input.test.tsx
+@@ -0,0 +1,29 @@
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { VideoUploadInput } from "@/components/video/video-upload-input";
++
++describe("VideoUploadInput", () => {
++  it("accepts video files and marks cancelled selection as touched", async () => {
++    const user = userEvent.setup();
++    const onSelect = vi.fn();
++    const onTouched = vi.fn();
++
++    render(
++      <VideoUploadInput
++        videos={[]}
++        existingMatches={[]}
++        onSelect={onSelect}
++        onTouched={onTouched}
++      />,
++    );
++
++    const input = screen.getByLabelText("Add video");
++
++    expect(input).toHaveAttribute("accept", "video/*");
++
++    await user.upload(input, []);
++
++    expect(onTouched).toHaveBeenCalled();
++  });
++});
+
+exec
+/bin/zsh -lc 'git status --porcelain=v1' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/runs/run-20260507-200253-24281-iter-1.log
+
+exec
+/bin/zsh -lc 'git show -s --format="%h %s" HEAD && git show -s --format="%h %s" HEAD~1' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+869d6a6 chore(ralph): record video upload run
+2818db4 feat(video): add upload hashing flow
+
+exec
+/bin/zsh -lc 'git log -2 --stat --oneline' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+869d6a6 chore(ralph): record video upload run
+ .ralph/activity.log                              |    1 +
+ .ralph/progress.md                               |   38 +
+ .ralph/runs/run-20260507-200253-24281-iter-1.log | 6416 ++++++++++++++++++++++
+ 3 files changed, 6455 insertions(+)
+2818db4 feat(video): add upload hashing flow
+ .agents/tasks/prd.json                           |     7 +-
+ .env.example                                     |     5 +
+ .ralph/.tmp/prompt-20260507-200253-24281-1.md    |   225 +
+ .ralph/.tmp/story-20260507-200253-24281-1.json   |    15 +
+ .ralph/.tmp/story-20260507-200253-24281-1.md     |    92 +
+ .ralph/activity.log                              |     5 +
+ .ralph/runs/run-20260507-200253-24281-iter-1.log | 71632 +++++++++++++++++++++
+ app/(authenticated)/steps/new/page.tsx           |    17 +-
+ components/video/step-video-upload-field.tsx     |    86 +
+ components/video/video-upload-input.tsx          |   123 +
+ convex/_generated/api.d.ts                       |     4 +
+ convex/videoStorage.ts                           |    36 +
+ convex/videoStorageActions.ts                    |    92 +
+ lib/video/hash-file.ts                           |    49 +
+ lib/video/storage-client.ts                      |    95 +
+ lib/video/storage-key.ts                         |     3 +
+ tests/video/hash-file.test.ts                    |    47 +
+ tests/video/storage-client.test.ts               |    91 +
+ tests/video/video-upload-input.test.tsx          |    29 +
+ 19 files changed, 72646 insertions(+), 7 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index c1c02063e06ee0ab1391b3397f4d6529fe84b491..acaecc7f964e59b02765622c8c83932302568bc7
+--- a/.env.example
++++ b/.env.example
+@@ -18,3 +18,8 @@
+ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/feed
+ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/feed
++
++# Google Cloud Storage signed video uploads.
++GCS_BUCKET_NAME=your-video-bucket
++GCS_CLIENT_EMAIL=service-account@project.iam.gserviceaccount.com
++GCS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index f1eef7615ca5f304db06e597160cf8cba1ee3754..f723a33b08bd9b16f01fa330eb8947a44fa028a7
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,44 @@
+ 
+ ---
+ 
++## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
++Thread:
++Run: 20260507-200253-24281 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 2818db4 feat(video): add upload hashing flow
++- Post-commit status: clean after final progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: dev-browser `/video-upload-harness` temporary route -> PASS
++- Files changed:
++  - .env.example
++  - app/(authenticated)/steps/new/page.tsx
++  - components/video/step-video-upload-field.tsx
++  - components/video/video-upload-input.tsx
++  - convex/_generated/api.d.ts
++  - convex/videoStorage.ts
++  - convex/videoStorageActions.ts
++  - lib/video/hash-file.ts
++  - lib/video/storage-client.ts
++  - lib/video/storage-key.ts
++  - tests/video/hash-file.test.ts
++  - tests/video/storage-client.test.ts
++  - tests/video/video-upload-input.test.tsx
++- What was implemented
++  Sampled 512 KiB chunk hashing, same-form duplicate prevention, owner-scoped existing-hash lookup, signed GCS upload URL action, owner-scoped storage keys, reusable video upload field on create step, and helper/component tests.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep hashing and upload decision helpers framework-free; wire Convex only in the field component.
++  - Gotchas encountered: protected `/steps/new` could not render in standalone browser because local Clerk keys cause a redirect loop; temporary public harness verified the upload control.
++  - Useful context: signed upload env needs `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
++---
++
+ ## [2026-05-07 19:55:08 +0200] - S02-04-create-migration-and-backfill-tooling: Create Migration And Backfill Tooling
+ Thread:
+ Run: 20260507-194102-61024 (iteration 1)
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index 2253cffa7e8f32bae4c7934c20c039d71e2e6d64..be33f16485c441bb2c4a6ec020134da651928f60
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,10 +1,17 @@
+-import { PlaceholderPage } from "@/components/placeholder-page";
++import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
+ 
+ export default function NewStepPage() {
+   return (
+-    <PlaceholderPage
+-      title="Create Step"
+-      description="Step creation placeholder. Form validation, video upload, and smart tags are implemented in later tasks."
+-    />
++    <main className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col gap-6 px-6 py-12">
++      <div>
++        <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++          Steps
++        </p>
++        <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
++      </div>
++      <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++        <StepVideoUploadField />
++      </section>
++    </main>
+   );
+ }
+diff --git a/components/video/step-video-upload-field.tsx b/components/video/step-video-upload-field.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..21e0a4bd2292785b9afa393fa39c04690481647e
+--- /dev/null
++++ b/components/video/step-video-upload-field.tsx
+@@ -0,0 +1,86 @@
++"use client";
++
++import { useAction, useConvex } from "convex/react";
++import { useState } from "react";
++import { api } from "@/convex/_generated/api";
++import type { Id } from "@/convex/_generated/dataModel";
++import { VideoUploadInput } from "./video-upload-input";
++import type {
++  ExistingVideoMatch,
++  StepVideo,
++  UploadedStepVideo,
++} from "@/lib/video/storage-client";
++
++type StepVideoUploadFieldProps = {
++  initialVideos?: StepVideo[];
++  currentStepId?: Id<"steps">;
++  onVideosChange?: (videos: StepVideo[]) => void;
++};
++
++export function StepVideoUploadField({
++  initialVideos = [],
++  currentStepId,
++  onVideosChange,
++}: StepVideoUploadFieldProps) {
++  const convex = useConvex();
++  const requestUpload = useAction(api.videoStorageActions.createUploadUrl);
++  const [videos, setVideos] = useState(initialVideos);
++  const [touched, setTouched] = useState(false);
++  const [duplicate, setDuplicate] = useState<UploadedStepVideo["duplicateOf"]>();
++  const [error, setError] = useState("");
++
++  function handleSelect(nextVideos: StepVideo[], selected: UploadedStepVideo) {
++    setVideos(nextVideos);
++    setDuplicate(selected.duplicateOf);
++    onVideosChange?.(nextVideos);
++  }
++
++  async function findExistingByHash(hash: string): Promise<ExistingVideoMatch | null> {
++    const matches = await convex.query(api.videoStorage.findExistingVideosByHash, {
++      hashes: [hash],
++      excludeStepId: currentStepId,
++    });
++
++    return matches[0] ?? null;
++  }
++
++  return (
++    <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++      <div>
++        <h2 id="videos-heading" className="text-base font-semibold">
++          Videos
++        </h2>
++        {touched && videos.length === 0 ? (
++          <p className="mt-1 text-sm text-red-700">Add at least one video.</p>
++        ) : null}
++        {duplicate ? (
++          <p className="mt-1 text-sm text-red-700">
++            Duplicate of {duplicate.stepName}
++          </p>
++        ) : null}
++        {error ? <p className="mt-1 text-sm text-red-700">{error}</p> : null}
++      </div>
++      <VideoUploadInput
++        videos={videos}
++        existingMatches={[]}
++        onSelect={handleSelect}
++        onTouched={() => setTouched(true)}
++        findExistingByHash={findExistingByHash}
++        requestUpload={requestUpload}
++        onError={setError}
++      />
++      {videos.length > 0 ? (
++        <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++          {videos.map((video) => (
++            <li key={video.hash} className="px-3 py-2 text-sm">
++              <span className="font-medium">{video.hash.slice(0, 12)}</span>
++              <span className="ml-2 text-[var(--muted-foreground)]">
++                {video.storageKey}
++              </span>
++            </li>
++          ))}
++        </ul>
++      ) : null}
++    </section>
++  );
++}
+diff --git a/components/video/video-upload-input.tsx b/components/video/video-upload-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e54ad31fc1b45101e48a7c033e6ce3ecd9723feb
+--- /dev/null
++++ b/components/video/video-upload-input.tsx
+@@ -0,0 +1,123 @@
++"use client";
++
++import { Upload } from "lucide-react";
++import { useId, useState } from "react";
++import { hashVideoFile } from "@/lib/video/hash-file";
++import {
++  addVideoSelection,
++  type ExistingVideoMatch,
++  type StepVideo,
++  type UploadedStepVideo,
++  uploadVideoForStep,
++} from "@/lib/video/storage-client";
++
++type VideoUploadInputProps = {
++  videos: StepVideo[];
++  existingMatches: ExistingVideoMatch[];
++  onSelect: (videos: StepVideo[], selected: UploadedStepVideo) => void;
++  onTouched: () => void;
++  findExistingByHash?: (hash: string) => Promise<ExistingVideoMatch | null>;
++  requestUpload?: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<{ uploadUrl: string; storageKey: string }>;
++  onError?: (message: string) => void;
++};
++
++export function VideoUploadInput({
++  videos,
++  existingMatches,
++  onSelect,
++  onTouched,
++  findExistingByHash,
++  requestUpload,
++  onError,
++}: VideoUploadInputProps) {
++  const inputId = useId();
++  const [isBusy, setIsBusy] = useState(false);
++  const [status, setStatus] = useState("");
++
++  async function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
++    onTouched();
++    const file = event.target.files?.[0] ?? null;
++    event.currentTarget.value = "";
++
++    if (!file) {
++      return;
++    }
++
++    setIsBusy(true);
++    setStatus("Hashing video");
++
++    try {
++      const hash = await hashVideoFile(file);
++
++      if (videos.some((video) => video.hash === hash)) {
++        setStatus("Already selected");
++        return;
++      }
++
++      const existing =
++        existingMatches.find((match) => match.hash === hash) ??
++        (findExistingByHash ? await findExistingByHash(hash) : null);
++
++      if (!existing && !requestUpload) {
++        throw new Error("Video upload is not configured");
++      }
++
++      setStatus(existing ? "Reusing existing video" : "Uploading video");
++
++      const selected = await uploadVideoForStep({
++        file,
++        hash,
++        existing,
++        requestUpload: requestUpload ?? missingUploadTarget,
++      });
++      const next = addVideoSelection(videos, selected);
++
++      if (next.added) {
++        onSelect(next.videos, selected);
++      }
++
++      setStatus(
++        selected.duplicateOf
++          ? `Duplicate of ${selected.duplicateOf.stepName}`
++          : "Video ready",
++      );
++    } catch (error) {
++      const message = error instanceof Error ? error.message : "Video upload failed";
++      setStatus(message);
++      onError?.(message);
++    } finally {
++      setIsBusy(false);
++    }
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label
++        htmlFor={inputId}
++        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-medium shadow-sm"
++      >
++        <Upload size={16} aria-hidden="true" />
++        Add video
++      </label>
++      <input
++        id={inputId}
++        className="sr-only"
++        type="file"
++        accept="video/*"
++        disabled={isBusy}
++        onClick={onTouched}
++        onChange={handleChange}
++      />
++      <p className="min-h-5 text-sm text-[var(--muted-foreground)]" aria-live="polite">
++        {status}
++      </p>
++    </div>
++  );
++}
++
++async function missingUploadTarget(): Promise<never> {
++  throw new Error("Video upload is not configured");
++}
+diff --git a/convex/videoStorage.ts b/convex/videoStorage.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..55913d4aa61f08ddd5b646467115a8607c84bd72
+--- /dev/null
++++ b/convex/videoStorage.ts
+@@ -0,0 +1,36 @@
++import { v } from "convex/values";
++import { query } from "./_generated/server";
++import { requireUserId } from "./auth";
++
++export const findExistingVideosByHash = query({
++  args: {
++    hashes: v.array(v.string()),
++    excludeStepId: v.optional(v.id("steps")),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++    const requested = new Set(args.hashes);
++
++    if (requested.size === 0) {
++      return [];
++    }
++
++    const steps = await ctx.db
++      .query("steps")
++      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
++      .collect();
++
++    return steps.flatMap((step) =>
++      step._id === args.excludeStepId
++        ? []
++        : step.videos
++            .filter((video) => requested.has(video.hash))
++            .map((video) => ({
++              hash: video.hash,
++              storageKey: video.storageKey,
++              duplicateStepId: step._id,
++              duplicateStepName: step.name,
++            })),
++    );
++  },
++});
+diff --git a/convex/videoStorageActions.ts b/convex/videoStorageActions.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b42aeee4453ab14719e6c823e35e377ed8ba992
+--- /dev/null
++++ b/convex/videoStorageActions.ts
+@@ -0,0 +1,92 @@
++"use node";
++
++import { createSign } from "node:crypto";
++import { v } from "convex/values";
++import { action } from "./_generated/server";
++import { requireUserId } from "./auth";
++import { buildOwnerVideoStorageKey } from "../lib/video/storage-key";
++
++const uploadTtlSeconds = 15 * 60;
++
++export const createUploadUrl = action({
++  args: {
++    hash: v.string(),
++    contentType: v.string(),
++  },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++
++    if (!args.hash) {
++      throw new Error("Video hash is required");
++    }
++
++    if (args.contentType && !args.contentType.startsWith("video/")) {
++      throw new Error("Video upload content type must be video/*");
++    }
++
++    const bucket = requiredEnv("GCS_BUCKET_NAME");
++    const clientEmail = requiredEnv("GCS_CLIENT_EMAIL");
++    const privateKey = requiredEnv("GCS_PRIVATE_KEY").replace(/\\n/g, "\n");
++    const storageKey = buildOwnerVideoStorageKey(ownerId, args.hash);
++    const uploadUrl = createSignedPutUrl({
++      bucket,
++      clientEmail,
++      privateKey,
++      storageKey,
++      contentType: args.contentType || "video/mp4",
++      expires: Math.floor(Date.now() / 1000) + uploadTtlSeconds,
++    });
++
++    return { uploadUrl, storageKey };
++  },
++});
++
++function requiredEnv(name: string): string {
++  const value = process.env[name];
++
++  if (!value) {
++    throw new Error(`${name} is required`);
++  }
++
++  return value;
++}
++
++function createSignedPutUrl({
++  bucket,
++  clientEmail,
++  privateKey,
++  storageKey,
++  contentType,
++  expires,
++}: {
++  bucket: string;
++  clientEmail: string;
++  privateKey: string;
++  storageKey: string;
++  contentType: string;
++  expires: number;
++}) {
++  const host = "storage.googleapis.com";
++  const resource = `/${bucket}/${storageKey}`;
++  const escapedResource = resource
++    .split("/")
++    .map((part) => encodeURIComponent(part))
++    .join("/");
++  const stringToSign = [
++    "PUT",
++    "",
++    contentType,
++    expires.toString(),
++    resource,
++  ].join("\n");
++  const signer = createSign("RSA-SHA256");
++
++  signer.update(stringToSign);
++  signer.end();
++
++  const signature = encodeURIComponent(signer.sign(privateKey, "base64"));
++
++  return `https://${host}${escapedResource}?GoogleAccessId=${encodeURIComponent(
++    clientEmail,
++  )}&Expires=${expires}&Signature=${signature}`;
++}
+diff --git a/lib/video/hash-file.ts b/lib/video/hash-file.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2329eae4f5e46170c8746633a8ece99e347694c7
+--- /dev/null
++++ b/lib/video/hash-file.ts
+@@ -0,0 +1,49 @@
++export const VIDEO_HASH_CHUNK_SIZE = 512 * 1024;
++
++const samplingRatio = Math.E / Math.PI;
++
++export function sampledChunkIndexes(fileSize: number): number[] {
++  if (fileSize <= 0) {
++    return [];
++  }
++
++  const totalChunks = Math.ceil(fileSize / VIDEO_HASH_CHUNK_SIZE);
++  const samplingInterval = Math.max(
++    Math.round(samplingRatio * Math.sqrt(totalChunks)),
++    1,
++  );
++  const indexes: number[] = [];
++
++  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
++    if (chunkIndex % samplingInterval === 0) {
++      indexes.push(chunkIndex);
++    }
++  }
++
++  return indexes;
++}
++
++export async function hashVideoFile(file: File): Promise<string> {
++  const chunks = await Promise.all(
++    sampledChunkIndexes(file.size).map(async (chunkIndex) => {
++      const start = chunkIndex * VIDEO_HASH_CHUNK_SIZE;
++      const end = Math.min(start + VIDEO_HASH_CHUNK_SIZE, file.size);
++
++      return new Uint8Array(await file.slice(start, end).arrayBuffer());
++    }),
++  );
++  const sampledSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
++  const sampledBytes = new Uint8Array(sampledSize);
++  let offset = 0;
++
++  for (const chunk of chunks) {
++    sampledBytes.set(chunk, offset);
++    offset += chunk.byteLength;
++  }
++
++  const digest = await crypto.subtle.digest("SHA-256", sampledBytes);
++
++  return [...new Uint8Array(digest)]
++    .map((byte) => byte.toString(16).padStart(2, "0"))
++    .join("");
++}
+diff --git a/lib/video/storage-client.ts b/lib/video/storage-client.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6bb8886136d9b791b5101ef72c289efb0fda3df3
+--- /dev/null
++++ b/lib/video/storage-client.ts
+@@ -0,0 +1,95 @@
++export type StepVideo = {
++  hash: string;
++  storageKey: string;
++};
++
++export type ExistingVideoMatch = StepVideo & {
++  duplicateStepId?: string;
++  duplicateStepName?: string;
++};
++
++export type UploadedStepVideo = StepVideo & {
++  duplicateOf?: {
++    stepId: string;
++    stepName: string;
++  };
++};
++
++type UploadTarget = {
++  uploadUrl: string;
++  storageKey: string;
++};
++
++type UploadVideoForStepArgs = {
++  file: File;
++  hash: string;
++  existing: ExistingVideoMatch | null;
++  requestUpload: (input: {
++    hash: string;
++    contentType: string;
++  }) => Promise<UploadTarget>;
++  upload?: (uploadUrl: string, file: File, contentType: string) => Promise<void>;
++};
++
++export { buildOwnerVideoStorageKey } from "./storage-key";
++
++export function addVideoSelection<T extends StepVideo>(
++  videos: T[],
++  candidate: T,
++):
++  | { videos: T[]; added: true; reason?: never }
++  | { videos: T[]; added: false; reason: "already-selected" } {
++  if (videos.some((video) => video.hash === candidate.hash)) {
++    return { videos, added: false, reason: "already-selected" };
++  }
++
++  return { videos: [...videos, candidate], added: true };
++}
++
++export async function putVideoFile(
++  uploadUrl: string,
++  file: File,
++  contentType: string,
++) {
++  const response = await fetch(uploadUrl, {
++    method: "PUT",
++    headers: { "Content-Type": contentType },
++    body: file,
++  });
++
++  if (!response.ok) {
++    throw new Error(`Video upload failed with status ${response.status}`);
++  }
++}
++
++export async function uploadVideoForStep({
++  file,
++  hash,
++  existing,
++  requestUpload,
++  upload = putVideoFile,
++}: UploadVideoForStepArgs): Promise<UploadedStepVideo> {
++  if (existing) {
++    return {
++      hash,
++      storageKey: existing.storageKey,
++      duplicateOf:
++        existing.duplicateStepId && existing.duplicateStepName
++          ? {
++              stepId: existing.duplicateStepId,
++              stepName: existing.duplicateStepName,
++            }
++          : undefined,
++    };
++  }
++
++  const contentType = file.type || "video/mp4";
++  const target = await requestUpload({ hash, contentType });
++
++  await upload(target.uploadUrl, file, contentType);
++
++  return {
++    hash,
++    storageKey: target.storageKey,
++  };
++}
+diff --git a/lib/video/storage-key.ts b/lib/video/storage-key.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..108ac5713abd0e9e61caae6b45a5ee4f6493e0a9
+--- /dev/null
++++ b/lib/video/storage-key.ts
+@@ -0,0 +1,3 @@
++export function buildOwnerVideoStorageKey(ownerId: string, hash: string): string {
++  return `videos/${encodeURIComponent(ownerId)}/${encodeURIComponent(hash)}`;
++}
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/video/hash-file.test.ts b/tests/video/hash-file.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4c19b120750070503e7cd41c667f9dafcbebda2
+--- /dev/null
++++ b/tests/video/hash-file.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from "vitest";
++import {
++  VIDEO_HASH_CHUNK_SIZE,
++  hashVideoFile,
++  sampledChunkIndexes,
++} from "@/lib/video/hash-file";
++
++function videoFile(bytes: Uint8Array) {
++  const body = new ArrayBuffer(bytes.byteLength);
++
++  new Uint8Array(body).set(bytes);
++
++  return new File([body], "clip.mp4", { type: "video/mp4" });
++}
++
++describe("video file hashing", () => {
++  it("uses the required sampled chunk interval", () => {
++    expect(sampledChunkIndexes(0)).toEqual([]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE)).toEqual([0]);
++    expect(sampledChunkIndexes(VIDEO_HASH_CHUNK_SIZE * 16)).toEqual([
++      0, 3, 6, 9, 12, 15,
++    ]);
++  });
++
++  it("hashes only sampled chunks in chunk order", async () => {
++    const bytes = new Uint8Array(VIDEO_HASH_CHUNK_SIZE * 4);
++    bytes.fill(1, 0, VIDEO_HASH_CHUNK_SIZE);
++    bytes.fill(2, VIDEO_HASH_CHUNK_SIZE, VIDEO_HASH_CHUNK_SIZE * 2);
++    bytes.fill(3, VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3);
++    bytes.fill(4, VIDEO_HASH_CHUNK_SIZE * 3);
++
++    const hash = await hashVideoFile(videoFile(bytes));
++    const expected = await crypto.subtle.digest(
++      "SHA-256",
++      new Uint8Array([
++        ...bytes.slice(0, VIDEO_HASH_CHUNK_SIZE),
++        ...bytes.slice(VIDEO_HASH_CHUNK_SIZE * 2, VIDEO_HASH_CHUNK_SIZE * 3),
++      ]),
++    );
++
++    expect(hash).toBe(
++      [...new Uint8Array(expected)]
++        .map((byte) => byte.toString(16).padStart(2, "0"))
++        .join(""),
++    );
++  });
++});
+diff --git a/tests/video/storage-client.test.ts b/tests/video/storage-client.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4bb20db019fca799aa69204815589e2e0af262d
+--- /dev/null
++++ b/tests/video/storage-client.test.ts
+@@ -0,0 +1,91 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  addVideoSelection,
++  buildOwnerVideoStorageKey,
++  uploadVideoForStep,
++  type ExistingVideoMatch,
++} from "@/lib/video/storage-client";
++
++function fileWithHashName() {
++  return new File([new Uint8Array([1, 2, 3])], "clip.mp4", {
++    type: "video/mp4",
++  });
++}
++
++describe("video storage client helpers", () => {
++  it("builds owner-scoped object keys", () => {
++    expect(buildOwnerVideoStorageKey("user/a", "abc/123")).toBe(
++      "videos/user%2Fa/abc%2F123",
++    );
++  });
++
++  it("blocks same-form duplicate hashes", () => {
++    const current = [{ hash: "hash-a", storageKey: "videos/user/hash-a" }];
++
++    expect(addVideoSelection(current, current[0])).toEqual({
++      videos: current,
++      added: false,
++      reason: "already-selected",
++    });
++  });
++
++  it("reuses owner-scoped storage keys for existing hashes", async () => {
++    const existing: ExistingVideoMatch = {
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateStepId: "step-a",
++      duplicateStepName: "Existing step",
++    };
++    const upload = vi.fn();
++    const requestUpload = vi.fn();
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-a",
++        existing,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-a",
++      storageKey: "videos/user-a/hash-a",
++      duplicateOf: {
++        stepId: "step-a",
++        stepName: "Existing step",
++      },
++    });
++    expect(requestUpload).not.toHaveBeenCalled();
++    expect(upload).not.toHaveBeenCalled();
++  });
++
++  it("requests a signed URL before uploading new hashes", async () => {
++    const upload = vi.fn().mockResolvedValue(undefined);
++    const requestUpload = vi.fn().mockResolvedValue({
++      uploadUrl: "https://storage.googleapis.test/upload",
++      storageKey: "videos/user-a/hash-b",
++    });
++
++    await expect(
++      uploadVideoForStep({
++        file: fileWithHashName(),
++        hash: "hash-b",
++        existing: null,
++        requestUpload,
++        upload,
++      }),
++    ).resolves.toEqual({
++      hash: "hash-b",
++      storageKey: "videos/user-a/hash-b",
++    });
++    expect(requestUpload).toHaveBeenCalledWith({
++      hash: "hash-b",
++      contentType: "video/mp4",
++    });
++    expect(upload).toHaveBeenCalledWith(
++      "https://storage.googleapis.test/upload",
++      expect.any(File),
++      "video/mp4",
++    );
++  });
++});
+diff --git a/tests/video/video-upload-input.test.tsx b/tests/video/video-upload-input.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4f7552b5aecee7a79e3fbce286aad86e2699d53
+--- /dev/null
++++ b/tests/video/video-upload-input.test.tsx
+@@ -0,0 +1,29 @@
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { VideoUploadInput } from "@/components/video/video-upload-input";
++
++describe("VideoUploadInput", () => {
++  it("accepts video files and marks cancelled selection as touched", async () => {
++    const user = userEvent.setup();
++    const onSelect = vi.fn();
++    const onTouched = vi.fn();
++
++    render(
++      <VideoUploadInput
++        videos={[]}
++        existingMatches={[]}
++        onSelect={onSelect}
++        onTouched={onTouched}
++      />,
++    );
++
++    const input = screen.getByLabelText("Add video");
++
++    expect(input).toHaveAttribute("accept", "video/*");
++
++    await user.upload(input, []);
++
++    expect(onTouched).toHaveBeenCalled();
++  });
++});
+
+codex
+The run log keeps changing as commands are captured, so I’m doing one quiet final run-log commit and avoiding further shell inspection afterward.
