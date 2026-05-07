@@ -240,7 +240,7 @@
     {
       "id": "S05-01-implement-search-filters-scoring-and-sorting",
       "title": "Implement Search Filters, Scoring, And Sorting",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S04-04-implement-inline-edit-modal"
       ],
@@ -250,8 +250,8 @@
         "Search helpers are independent from React components."
       ],
       "startedAt": "2026-05-07T19:55:57.895687+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T19:55:57.895849+00:00"
+      "completedAt": "2026-05-07T20:02:27.601632+00:00",
+      "updatedAt": "2026-05-07T20:02:27.601197+00:00"
     },
     {
       "id": "S05-02-build-search-overlay-ui",
