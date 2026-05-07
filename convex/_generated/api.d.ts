@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as adminAuth from "../adminAuth.js";
+import type * as adminBackfills from "../adminBackfills.js";
+import type * as adminImport from "../adminImport.js";
 import type * as auth from "../auth.js";
 import type * as model_practiceSessions from "../model/practiceSessions.js";
 import type * as model_steps from "../model/steps.js";
@@ -22,6 +25,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adminAuth: typeof adminAuth;
+  adminBackfills: typeof adminBackfills;
+  adminImport: typeof adminImport;
   auth: typeof auth;
   "model/practiceSessions": typeof model_practiceSessions;
   "model/steps": typeof model_steps;

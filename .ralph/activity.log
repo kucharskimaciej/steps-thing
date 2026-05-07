@@ -11,3 +11,6 @@
 2026-05-07 13:16:33 +0200 Verification passed: typecheck, lint, test, build, convex dev once.
 2026-05-07 13:17:04 +0200 Updated progress log for S02-03 no-commit run.
 [2026-05-07 13:17:17] ITERATION 1 end (duration=440s)
+[2026-05-07 19:41:03] ITERATION 1 start (mode=build story=S02-04-create-migration-and-backfill-tooling)
+2026-05-07T19:50:13+02:00 Major code changes: migration audit/map/import tooling and Convex admin APIs
+2026-05-07T19:54:06+02:00 Verification: audit, dry-run, typecheck, lint, test, build, Convex dev once completed

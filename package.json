@@ -10,6 +10,8 @@
     "dev:all": "concurrently --kill-others --names next,convex --prefix-colors blue,magenta \"pnpm dev\" \"pnpm convex:dev\"",
     "build": "next build",
     "lint": "biome lint .",
+    "migration:audit": "tsx scripts/migrate-backup/auditBackup.ts",
+    "migration:import": "tsx scripts/migrate-backup/importBackupToConvex.ts",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "prepare": "husky",
@@ -43,6 +45,7 @@
     "husky": "^9.1.7",
     "jsdom": "latest",
     "tailwindcss": "latest",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "latest"
   }

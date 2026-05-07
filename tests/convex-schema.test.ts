@@ -20,6 +20,7 @@ const table = (name: string) => {
 describe("Convex schema", () => {
   it("defines owner-scoped step indexes", () => {
     expect(table("steps").indexes).toEqual([
+      { indexDescriptor: "by_legacyId", fields: ["legacyId"] },
       { indexDescriptor: "by_owner", fields: ["ownerId"] },
       {
         indexDescriptor: "by_owner_identifier",
@@ -42,6 +43,7 @@ describe("Convex schema", () => {
 
   it("defines owner-scoped practice session indexes", () => {
     expect(table("practiceSessions").indexes).toEqual([
+      { indexDescriptor: "by_legacyId", fields: ["legacyId"] },
       { indexDescriptor: "by_owner", fields: ["ownerId"] },
       {
         indexDescriptor: "by_owner_createdAt",

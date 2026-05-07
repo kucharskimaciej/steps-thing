@@ -8,3 +8,9 @@ NEVER WRITE ANYTHING TO LINEAR BEFORE ASKING ME FOR PERMISSION
 2. **Unresolved questions**: End each plan with unresolved questions list, if any.
 3. **Tracer bullets**: Build tiny end-to-end slice first, get feedback, then expand. (Pragmatic Programmer.)
 4. **Multiple phases**: Plan multiple small phases. Overcorrect toward smaller steps.
+
+## Operational
+
+- Verify with `pnpm typecheck`, `pnpm lint`, `pnpm test -- --run`.
+- Run `pnpm build` when app/runtime behavior changes.
+- Run `CI=1 pnpm exec convex dev --once --tail-logs disable` when Convex schema/functions change.

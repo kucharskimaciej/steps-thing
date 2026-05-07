@@ -9,6 +9,7 @@ import {
 
 export default defineSchema({
   steps: defineTable({
+    legacyId: v.optional(v.string()),
     ownerId: v.string(),
     identifier: v.number(),
     name: v.string(),
@@ -29,13 +30,16 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     lastViewedAt: v.optional(v.number()),
+    needsVideoProcessing: v.optional(v.boolean()),
   })
+    .index("by_legacyId", ["legacyId"])
     .index("by_owner", ["ownerId"])
     .index("by_owner_identifier", ["ownerId", "identifier"])
     .index("by_owner_variationKey", ["ownerId", "variationKey"])
     .index("by_owner_createdAt", ["ownerId", "createdAt"])
     .index("by_owner_updatedAt", ["ownerId", "updatedAt"]),
   practiceSessions: defineTable({
+    legacyId: v.optional(v.string()),
     ownerId: v.string(),
     name: v.string(),
     steps: v.array(v.id("steps")),
@@ -43,6 +47,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_legacyId", ["legacyId"])
     .index("by_owner", ["ownerId"])
     .index("by_owner_createdAt", ["ownerId", "createdAt"]),
 });

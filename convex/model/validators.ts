@@ -60,3 +60,43 @@ export const practiceRecordInputValidator = v.object({
   startOfDay: v.number(),
   collectionId: v.optional(v.id("practiceSessions")),
 });
+
+export const importedPracticeRecordValidator = v.object({
+  date: v.number(),
+  startOfDay: v.number(),
+});
+
+export const importedStepValidator = v.object({
+  legacyId: v.string(),
+  ownerId: v.string(),
+  identifier: v.number(),
+  name: v.string(),
+  videos: v.array(videoValidator),
+  videoHashes: v.array(v.string()),
+  difficulty: difficultyValidator,
+  feeling: v.array(v.string()),
+  kind: kindValidator,
+  tags: v.array(v.string()),
+  artists: v.array(v.string()),
+  notes: v.string(),
+  smartTags: v.array(v.string()),
+  removedSmartTags: v.array(v.string()),
+  tokens: v.array(v.string()),
+  variationKey: v.string(),
+  practiceRecords: v.array(importedPracticeRecordValidator),
+  viewRecords: v.array(v.number()),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+  lastViewedAt: v.optional(v.number()),
+  needsVideoProcessing: v.boolean(),
+});
+
+export const importedSessionValidator = v.object({
+  legacyId: v.string(),
+  ownerId: v.string(),
+  name: v.string(),
+  legacyStepIds: v.array(v.string()),
+  locked: v.boolean(),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+});
