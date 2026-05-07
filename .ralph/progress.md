@@ -204,3 +204,40 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-13
   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
 ---
+
+## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
+Thread:
+Run: 20260507-205447-62953 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 71a4d85 feat(steps): add shared step form
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/forms/checklist.tsx
+  - components/forms/select.tsx
+  - components/forms/tags-input.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - lib/steps/step-form-defaults.ts
+  - lib/steps/step-form-schema.ts
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
+  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
+  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
+---
