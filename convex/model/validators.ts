@@ -28,3 +28,35 @@ export const practiceRecordValidator = v.object({
   startOfDay: v.number(),
   collectionId: v.optional(v.id("practiceSessions")),
 });
+
+export const createStepInputValidator = v.object({
+  name: v.string(),
+  videos: v.array(videoValidator),
+  difficulty: difficultyValidator,
+  feeling: v.array(v.string()),
+  kind: kindValidator,
+  tags: v.array(v.string()),
+  artists: v.array(v.string()),
+  notes: v.string(),
+  removedSmartTags: v.array(v.string()),
+  variationKey: v.string(),
+});
+
+export const updateStepInputValidator = v.object({
+  name: v.optional(v.string()),
+  videos: v.optional(v.array(videoValidator)),
+  difficulty: v.optional(difficultyValidator),
+  feeling: v.optional(v.array(v.string())),
+  kind: v.optional(kindValidator),
+  tags: v.optional(v.array(v.string())),
+  artists: v.optional(v.array(v.string())),
+  notes: v.optional(v.string()),
+  removedSmartTags: v.optional(v.array(v.string())),
+  variationKey: v.optional(v.string()),
+});
+
+export const practiceRecordInputValidator = v.object({
+  date: v.number(),
+  startOfDay: v.number(),
+  collectionId: v.optional(v.id("practiceSessions")),
+});
