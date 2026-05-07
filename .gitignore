@@ -10,5 +10,7 @@ backups/
 ralph-*.log
 .codex
 .agents/*
+!.agents/ralph/
+!.agents/ralph/**
 !.agents/tasks/
 !.agents/tasks/**
