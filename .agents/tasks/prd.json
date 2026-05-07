@@ -288,7 +288,7 @@
     {
       "id": "S05-04-implement-view-and-practice-recording",
       "title": "Implement View And Practice Recording",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S05-03-build-virtualized-feed-and-step-actions"
       ],
@@ -298,8 +298,8 @@
         "Feed action state updates after mutations."
       ],
       "startedAt": "2026-05-07T20:26:13.002846+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T20:26:13.003081+00:00"
+      "completedAt": "2026-05-07T20:33:44.017818+00:00",
+      "updatedAt": "2026-05-07T20:33:44.017426+00:00"
     },
     {
       "id": "S06-01-implement-private-step-list",
