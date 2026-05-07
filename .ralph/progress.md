@@ -6,6 +6,49 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 19:55:08 +0200] - S02-04-create-migration-and-backfill-tooling: Create Migration And Backfill Tooling
+Thread:
+Run: 20260507-194102-61024 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-194102-61024-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-194102-61024-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 045ec04 feat(migration): add backup import tooling
+- Post-commit status: clean after final progress commit
+- Verification:
+  - Command: `pnpm migration:audit` -> PASS
+  - Command: `pnpm migration:import` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+- Files changed:
+  - scripts/migrate-backup/README.md
+  - scripts/migrate-backup/readFirestoreValue.ts
+  - scripts/migrate-backup/auditBackup.ts
+  - scripts/migrate-backup/mapBackupStep.ts
+  - scripts/migrate-backup/mapBackupSession.ts
+  - scripts/migrate-backup/importBackupToConvex.ts
+  - scripts/migrate-backup/types.ts
+  - convex/adminAuth.ts
+  - convex/adminImport.ts
+  - convex/adminBackfills.ts
+  - convex/schema.ts
+  - convex/model/validators.ts
+  - tests/migration/backup-migration.test.ts
+  - tests/convex-schema.test.ts
+  - package.json
+  - pnpm-lock.yaml
+  - AGENTS.md
+- What was implemented
+  Backup audit, recursive Firestore value reader, deterministic legacy-to-camelCase mappers, dry-run/write import CLI, schema legacy IDs, admin-only upsert import mutation, explicit admin backfills for smart tags/thumbnails/tokens, docs, and migration tests.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep backup parsing framework-free so audit/mapping tests run without Convex credentials.
+  - Gotchas encountered: root Firestore documents are plain objects with wrapped child fields, not wrapped root objects.
+  - Useful context: write mode needs `STEPS_ADMIN_USER_IDS`, `CONVEX_ADMIN_TOKEN`, `CONVEX_ADMIN_USER_ID`, and `--write`; dry-run performs no mutation calls.
+---
+
 ## [2026-05-07 13:16:43 +0200] - S02-03-implement-owner-scoped-queries-and-mutations: Implement Owner-Scoped Queries And Mutations
 Thread:
 Run: 20260507-130957-33268 (iteration 1)
