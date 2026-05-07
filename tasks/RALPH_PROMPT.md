@@ -2,7 +2,9 @@ You are running the Ralph loop for this repo.
 You are inside an isolated git worktree.
 
 Hard rules:
-- Follow AGENTS.md.
+- Use only this worktree as project scope.
+- Do not inspect parent or sibling directories.
+- Do not search for AGENTS.md outside this worktree.
 - NEVER write to Linear without explicit permission.
 - Complete exactly one TODO task per run unless blocked.
 - Work tasks from TODO.md, top to bottom.
