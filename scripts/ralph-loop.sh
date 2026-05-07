@@ -47,7 +47,7 @@ for ((iteration = 1; iteration <= TASK_LIMIT; iteration++)); do
     fail "codex exec exited non-zero during iteration $iteration"
   fi
 
-  if git -C "$WORKTREE_DIR" diff --quiet && git -C "$WORKTREE_DIR" diff --cached --quiet; then
+  if [[ -z "$(git -C "$WORKTREE_DIR" status --porcelain)" ]]; then
     fail "codex produced no file changes during iteration $iteration"
   fi
 

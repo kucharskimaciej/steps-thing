@@ -9,3 +9,5 @@ convex/_generated/
 backups/
 .DS_Store
 ralph-*.log
+.codex
+.agents

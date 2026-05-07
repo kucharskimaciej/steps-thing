@@ -33,7 +33,9 @@ Default verification:
 - pnpm lint
 - pnpm test
 - pnpm build when UI/app behavior affected
-- npx convex dev --once when Convex schema/functions affected
+- CI=1 pnpm exec convex dev --once --tail-logs disable when Convex schema/functions affected
+  - If it fails only with network/auth fetch failure (`TypeError: fetch failed`, `Unexpected error when authorizing - are you connected to the internet?`, `Failed to fetch latest backend version`, DNS/ENOTFOUND), log `Convex verification skipped: network unavailable` and do not block task completion.
+  - Still block task completion on Convex type/schema/function errors.
 
 Before editing:
 - inspect relevant files
