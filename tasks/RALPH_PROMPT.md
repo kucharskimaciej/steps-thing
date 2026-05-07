@@ -1,4 +1,5 @@
 You are running the Ralph loop for this repo.
+You are inside an isolated git worktree.
 
 Hard rules:
 - Follow AGENTS.md.
@@ -10,6 +11,7 @@ Hard rules:
 - End plans with unresolved questions, if any.
 - Do not mark TODO complete until verification passes.
 - Do not revert user changes.
+- Do not commit, push, or create a PR; the shell script handles that after success.
 
 Loop:
 1. Read TODO.md.

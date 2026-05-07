@@ -12,14 +12,41 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+BRANCH="codex/ralph-$RUN_ID"
+WORKTREE_DIR="$(cd -- "$ROOT_DIR/.." && pwd)/steps-thing-ralph-$RUN_ID"
+PR_URL=""
+
+git worktree add -b "$BRANCH" "$WORKTREE_DIR"
+
 for ((iteration = 1; iteration <= TASK_LIMIT; iteration++)); do
-  if ! grep -F -- "- [ ]" TODO.md >/dev/null 2>&1; then
+  if ! grep -F -- "- [ ]" "$WORKTREE_DIR/TODO.md" >/dev/null 2>&1; then
     echo "No TODO tasks left."
     exit 0
   fi
 
   echo "Starting Ralph iteration $iteration/$TASK_LIMIT."
-  codex exec --full-auto "$(cat tasks/RALPH_PROMPT.md)"
+  codex exec --full-auto --cd "$WORKTREE_DIR" "$(cat "$WORKTREE_DIR/tasks/RALPH_PROMPT.md")"
+
+  if git -C "$WORKTREE_DIR" diff --quiet && git -C "$WORKTREE_DIR" diff --cached --quiet; then
+    echo "Ralph produced no changes; stopping."
+    exit 1
+  fi
+
+  git -C "$WORKTREE_DIR" add -A
+  git -C "$WORKTREE_DIR" commit -m "chore(ralph): complete task $iteration"
+  git -C "$WORKTREE_DIR" push -u origin "$BRANCH"
+
+  if [[ -z "$PR_URL" ]]; then
+    PR_URL="$(gh pr create \
+      --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+      --head "$BRANCH" \
+      --base "$(git -C "$ROOT_DIR" branch --show-current)" \
+      --draft \
+      --title "Ralph task run $RUN_ID" \
+      --body "Automated Ralph task run. Task limit: $TASK_LIMIT.")"
+    echo "Draft PR: $PR_URL"
+  fi
 
   echo "Iteration complete."
   sleep 2
