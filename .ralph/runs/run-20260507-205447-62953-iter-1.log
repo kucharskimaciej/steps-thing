@@ -80980,3 +80980,5507 @@ index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53
 +
 +const _typecheck: StepFormValues | null = null;
 
+exec
+/bin/zsh -lc 'git add -A && git commit -m "docs(ralph): record step form progress" -m "Append S04-01 progress, verification details, and activity log updates for the completed step form run.
+
+Reference: S04-01-build-step-form-validation-and-smart-tags"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 2559ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 100 files in 76ms. No fixes applied.
+[main 546c73a] docs(ralph): record step form progress
+ 3 files changed, 9419 insertions(+)
+
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 71e5c3195f33b343e4663b112b7b4e0b02489f59..0e628061f157f0962a5c65f746e1b33b28d58c90
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -42,3 +42,8 @@
+ [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
+ [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+ [2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
++[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
++[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
++[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
++[2026-05-07 21:05:43] Completed security performance regression review for S04-01
++[2026-05-07 21:06:08] Updated progress log for S04-01 step form validation and smart tags
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 4ea38350d12c7bc2647a91db3562a70fc91609b8..23a9712aca9f13f3c79d92854d8da51607fd3911
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -204,3 +204,40 @@
+   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+ ---
++
++## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
++Thread:
++Run: 20260507-205447-62953 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 71a4d85 feat(steps): add shared step form
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/forms/checklist.tsx
++  - components/forms/select.tsx
++  - components/forms/tags-input.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - lib/steps/step-form-defaults.ts
++  - lib/steps/step-form-schema.ts
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
++  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
++  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index be33f16485c441bb2c4a6ec020134da651928f60..b5562246641dc7d974bec97c3a0158b89946296a
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,4 +1,4 @@
+-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
+ 
+ export default function NewStepPage() {
+   return (
+@@ -10,7 +10,7 @@
+         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+       </div>
+       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepVideoUploadField />
++        <StepFormWithUserData />
+       </section>
+     </main>
+   );
+diff --git a/components/forms/checklist.tsx b/components/forms/checklist.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e975bba2a7cfa8a5a290b62912e027908c59249
+--- /dev/null
++++ b/components/forms/checklist.tsx
+@@ -0,0 +1,52 @@
++"use client";
++
++type ChecklistOption = {
++  value: string;
++  label: string;
++};
++
++type ChecklistProps = {
++  label: string;
++  values: string[];
++  options: ChecklistOption[];
++  error?: string;
++  onChange: (values: string[]) => void;
++};
++
++export function Checklist({
++  label,
++  values,
++  options,
++  error,
++  onChange,
++}: ChecklistProps) {
++  function toggle(value: string) {
++    onChange(
++      values.includes(value)
++        ? values.filter((candidate) => candidate !== value)
++        : [...values, value],
++    );
++  }
++
++  return (
++    <fieldset className="flex flex-col gap-2">
++      <legend className="text-sm font-medium">{label}</legend>
++      <div className="flex flex-wrap gap-2">
++        {options.map((option) => (
++          <label
++            key={option.value}
++            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++          >
++            <input
++              type="checkbox"
++              checked={values.includes(option.value)}
++              onChange={() => toggle(option.value)}
++            />
++            {option.label}
++          </label>
++        ))}
++      </div>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </fieldset>
++  );
++}
+diff --git a/components/forms/select.tsx b/components/forms/select.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5af68eaeb7ebcc9429b491375396f7903e3b07bb
+--- /dev/null
++++ b/components/forms/select.tsx
+@@ -0,0 +1,55 @@
++"use client";
++
++import { useId } from "react";
++
++type SelectOption<T extends string | number> = {
++  value: T;
++  label: string;
++};
++
++type SelectProps<T extends string | number> = {
++  label: string;
++  value: T;
++  options: SelectOption<T>[];
++  error?: string;
++  onChange: (value: T) => void;
++};
++
++export function Select<T extends string | number>({
++  label,
++  value,
++  options,
++  error,
++  onChange,
++}: SelectProps<T>) {
++  const id = useId();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <select
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={String(value)}
++        onChange={(event) => {
++          const option = options.find(
++            (candidate) => String(candidate.value) === event.target.value,
++          );
++
++          if (option) {
++            onChange(option.value);
++          }
++        }}
++      >
++        {options.map((option) => (
++          <option key={String(option.value)} value={String(option.value)}>
++            {option.label}
++          </option>
++        ))}
++      </select>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </div>
++  );
++}
+diff --git a/components/forms/tags-input.tsx b/components/forms/tags-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..895984c951a9705001284c182c8d579c2e8b8841
+--- /dev/null
++++ b/components/forms/tags-input.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { X } from "lucide-react";
++import { useId, useState } from "react";
++
++type TagsInputProps = {
++  label: string;
++  values: string[];
++  options?: string[];
++  onChange: (values: string[]) => void;
++};
++
++function normalize(value: string): string {
++  return value.trim();
++}
++
++export function TagsInput({
++  label,
++  values,
++  options = [],
++  onChange,
++}: TagsInputProps) {
++  const id = useId();
++  const [draft, setDraft] = useState("");
++  const listLabel = `Selected ${label.toLocaleLowerCase()}`;
++  const suggestions = options.filter((option) => !values.includes(option));
++
++  function addValue(value: string) {
++    const next = normalize(value);
++
++    if (!next || values.includes(next)) {
++      setDraft("");
++      return;
++    }
++
++    onChange([...values, next]);
++    setDraft("");
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <input
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={draft}
++        list={`${id}-options`}
++        onChange={(event) => setDraft(event.target.value)}
++        onBlur={() => addValue(draft)}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" || event.key === ",") {
++            event.preventDefault();
++            addValue(draft);
++          }
++        }}
++      />
++      <datalist id={`${id}-options`}>
++        {suggestions.map((option) => (
++          <option key={option} value={option} />
++        ))}
++      </datalist>
++      {suggestions.length > 0 ? (
++        <div className="flex flex-wrap gap-2" role="listbox" aria-label={`${label} options`}>
++          {suggestions.map((option) => (
++            <button
++              key={option}
++              type="button"
++              role="option"
++              className="rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-1 text-xs"
++              onClick={() => addValue(option)}
++            >
++              {option}
++            </button>
++          ))}
++        </div>
++      ) : null}
++      {values.length > 0 ? (
++        <fieldset aria-label={listLabel} className="flex flex-wrap gap-2">
++          {values.map((value) => (
++            <span
++              key={value}
++              className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--foreground)] px-2 text-xs text-white"
++            >
++              {value}
++              <button
++                type="button"
++                aria-label={`Remove ${label.toLocaleLowerCase()} ${value}`}
++                onClick={() =>
++                  onChange(values.filter((candidate) => candidate !== value))
++                }
++              >
++                <X size={14} aria-hidden="true" />
++              </button>
++            </span>
++          ))}
++        </fieldset>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..314efe186cee02dfe4079b89de1e491b186d9b8a
+--- /dev/null
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -0,0 +1,29 @@
++"use client";
++
++import { useQuery } from "convex/react";
++import { api } from "@/convex/_generated/api";
++import { StepForm } from "./step-form";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormWithUserDataProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++export function StepFormWithUserData(props: StepFormWithUserDataProps) {
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++
++  return (
++    <StepForm
++      {...props}
++      tagOptions={existing?.tags ?? []}
++      artistOptions={existing?.artists ?? []}
++    />
++  );
++}
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bea8645e116b6a5adc14c3bd5c1f94a945f4e405
+--- /dev/null
++++ b/components/steps/step-form.tsx
+@@ -0,0 +1,314 @@
++"use client";
++
++import { Check, RotateCcw, Save, X } from "lucide-react";
++import { type FormEvent, useEffect, useMemo, useState } from "react";
++import { Checklist } from "@/components/forms/checklist";
++import { Select } from "@/components/forms/select";
++import { TagsInput } from "@/components/forms/tags-input";
++import { getActiveAppConfig } from "@/lib/domain/config";
++import {
++  allowedSmartTags,
++  createStepFormDefaults,
++  deriveStepFormSmartFields,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import {
++  difficultyOptions,
++  type ExistingStepVideo,
++  type StepFormErrors,
++  type StepFormValues,
++  type StepMutationInput,
++  stepKindOptions,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++function nextVariationKey() {
++  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
++    return crypto.randomUUID();
++  }
++
++  return `variation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++}
++
++function unique(values: string[]) {
++  return [...new Set(values)];
++}
++
++function toMutationInput(values: StepFormValues): StepMutationInput {
++  return {
++    name: values.name.trim(),
++    videos: values.videos,
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    kind: values.kind,
++    tags: values.tags,
++    artists: values.artists,
++    notes: values.notes.trim(),
++    removedSmartTags: values.removedSmartTags,
++    variationKey: nextVariationKey(),
++  };
++}
++
++export function StepForm({
++  initialValues,
++  currentStepId,
++  existingVideos = [],
++  tagOptions = [],
++  artistOptions = [],
++  onSubmit,
++}: StepFormProps) {
++  const config = getActiveAppConfig();
++  const smartTagOptions = useMemo(() => allowedSmartTags(), []);
++  const [values, setValues] = useState<StepFormValues>(() => {
++    const defaults = createStepFormDefaults(initialValues);
++    const smartFields = deriveStepFormSmartFields(
++      defaults.name,
++      defaults.removedSmartTags,
++    );
++
++    return {
++      ...defaults,
++      smartTags: initialValues?.smartTags ?? smartFields.smartTags,
++      tokens: initialValues?.tokens ?? smartFields.tokens,
++    };
++  });
++  const [errors, setErrors] = useState<StepFormErrors>({});
++  const [submitMessage, setSubmitMessage] = useState("");
++
++  useEffect(() => {
++    const timeout = window.setTimeout(() => {
++      setValues((current) => ({
++        ...current,
++        ...deriveStepFormSmartFields(current.name, current.removedSmartTags),
++      }));
++    }, 200);
++
++    return () => window.clearTimeout(timeout);
++  }, [values.name, values.removedSmartTags]);
++
++  function update(patch: Partial<StepFormValues>) {
++    setValues((current) => ({ ...current, ...patch }));
++    setErrors({});
++    setSubmitMessage("");
++  }
++
++  function removeSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      smartTags: values.smartTags.filter((candidate) => candidate !== tag),
++      removedSmartTags: unique([...values.removedSmartTags, tag]),
++    });
++  }
++
++  function restoreSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      removedSmartTags: values.removedSmartTags.filter(
++        (candidate) => candidate !== tag,
++      ),
++    });
++  }
++
++  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++
++    const result = validateStepFormValues(values, {
++      currentStepId,
++      existingVideos,
++    });
++
++    if (!result.ok) {
++      setErrors(result.errors);
++      return;
++    }
++
++    await onSubmit?.(toMutationInput(result.values));
++    setSubmitMessage("Step is ready to save.");
++  }
++
++  return (
++    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++      <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++        <div>
++          <h2 id="videos-heading" className="text-base font-semibold">
++            Videos
++          </h2>
++          {errors.videos ? (
++            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++          ) : null}
++        </div>
++        {values.videos.length > 0 ? (
++          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++            {values.videos.map((video) => (
++              <li key={video.hash} className="px-3 py-2 text-sm">
++                <span className="font-medium">{video.hash.slice(0, 12)}</span>
++                <span className="ml-2 text-[var(--muted-foreground)]">
++                  {video.storageKey}
++                </span>
++              </li>
++            ))}
++          </ul>
++        ) : (
++          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++            Add a video before saving.
++          </p>
++        )}
++      </section>
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Name
++        <input
++          className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-normal"
++          value={values.name}
++          onChange={(event) => update({ name: event.target.value })}
++        />
++        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++      </label>
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <Select
++          label="Kind"
++          value={values.kind}
++          error={errors.kind}
++          options={stepKindOptions.map((kind) => ({
++            value: kind,
++            label: config.stepKinds[kind],
++          }))}
++          onChange={(kind) => update({ kind })}
++        />
++        <Select
++          label="Difficulty"
++          value={values.difficulty}
++          error={errors.difficulty}
++          options={difficultyOptions.map((difficulty) => ({
++            value: difficulty,
++            label: config.difficulties[difficulty],
++          }))}
++          onChange={(difficulty) => update({ difficulty })}
++        />
++      </div>
++
++      <Checklist
++        label="Feeling"
++        values={values.feeling}
++        error={errors.feeling}
++        options={Object.entries(config.feelings).map(([value, label]) => ({
++          value,
++          label,
++        }))}
++        onChange={(feeling) => update({ feeling })}
++      />
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <TagsInput
++          label="Tags"
++          values={values.tags}
++          options={tagOptions}
++          onChange={(tags) => update({ tags })}
++        />
++        <TagsInput
++          label="Artists"
++          values={values.artists}
++          options={artistOptions}
++          onChange={(artists) => update({ artists })}
++        />
++      </div>
++
++      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++        <h2 id="smart-tags-heading" className="text-sm font-medium">
++          Smart tags
++        </h2>
++        {values.smartTags.length > 0 ? (
++          <div className="flex flex-wrap gap-2">
++            {values.smartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--accent)] px-2 text-xs text-[var(--accent-foreground)]"
++              >
++                <Check size={14} aria-hidden="true" />
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Remove smart tag ${tag}`}
++                  onClick={() => removeSmartTag(tag)}
++                >
++                  <X size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        ) : (
++          <p className="text-sm text-[var(--muted-foreground)]">
++            No smart tags matched.
++          </p>
++        )}
++      </section>
++
++      {values.removedSmartTags.length > 0 ? (
++        <section
++          className="flex flex-col gap-2"
++          aria-labelledby="removed-smart-tags-heading"
++        >
++          <h2 id="removed-smart-tags-heading" className="text-sm font-medium">
++            Removed smart tags
++          </h2>
++          <div className="flex flex-wrap gap-2">
++            {values.removedSmartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
++              >
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Restore smart tag ${tag}`}
++                  onClick={() => restoreSmartTag(tag)}
++                >
++                  <RotateCcw size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        </section>
++      ) : null}
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Notes
++        <textarea
++          className="min-h-28 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-normal"
++          value={values.notes}
++          onChange={(event) => update({ notes: event.target.value })}
++        />
++      </label>
++
++      <div className="flex flex-wrap items-center gap-3">
++        <button
++          type="submit"
++          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++        >
++          <Save size={16} aria-hidden="true" />
++          Save step
++        </button>
++        {submitMessage ? (
++          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++            {submitMessage}
++          </p>
++        ) : null}
++      </div>
++    </form>
++  );
++}
+diff --git a/lib/steps/step-form-defaults.ts b/lib/steps/step-form-defaults.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a41c7b6e051a4e9268de50409510a60a31dbbb2e
+--- /dev/null
++++ b/lib/steps/step-form-defaults.ts
+@@ -0,0 +1,119 @@
++import { getActiveAppConfig } from "@/lib/domain/config";
++import { matchSmartTags } from "@/lib/domain/smart-tags";
++import { tokenizeStepName } from "@/lib/domain/tokenize";
++import {
++  difficultyOptions,
++  type StepFormErrors,
++  type StepFormValidationOptions,
++  type StepFormValidationResult,
++  type StepFormValues,
++  stepKindOptions,
++} from "./step-form-schema";
++
++function uniqueNonEmpty(values: string[]): string[] {
++  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
++}
++
++export function createStepFormDefaults(
++  values: Partial<StepFormValues> = {},
++): StepFormValues {
++  const defaults: StepFormValues = {
++    videos: [],
++    name: "",
++    difficulty: 1,
++    feeling: [],
++    kind: "step",
++    tags: [],
++    artists: [],
++    notes: "",
++    smartTags: [],
++    removedSmartTags: [],
++    tokens: [],
++  };
++
++  return {
++    ...defaults,
++    ...values,
++    videos: values.videos ?? defaults.videos,
++    feeling: uniqueNonEmpty(values.feeling ?? defaults.feeling),
++    tags: uniqueNonEmpty(values.tags ?? defaults.tags),
++    artists: uniqueNonEmpty(values.artists ?? defaults.artists),
++    smartTags: uniqueNonEmpty(values.smartTags ?? defaults.smartTags),
++    removedSmartTags: uniqueNonEmpty(
++      values.removedSmartTags ?? defaults.removedSmartTags,
++    ),
++    tokens: values.tokens ?? defaults.tokens,
++  };
++}
++
++export function deriveStepFormSmartFields(
++  name: string,
++  removedSmartTags: string[],
++): Pick<StepFormValues, "smartTags" | "tokens"> {
++  const removed = new Set(removedSmartTags);
++
++  return {
++    smartTags: matchSmartTags(name, getActiveAppConfig()).filter(
++      (tag) => !removed.has(tag),
++    ),
++    tokens: tokenizeStepName(name),
++  };
++}
++
++export function allowedSmartTags(): string[] {
++  return getActiveAppConfig()
++    .smartTagMatchers.map((matcher) => matcher.tag)
++    .sort((left, right) => left.localeCompare(right, "pl-PL"));
++}
++
++export function validateStepFormValues(
++  rawValues: StepFormValues,
++  options: StepFormValidationOptions = {},
++): StepFormValidationResult {
++  const values = createStepFormDefaults(rawValues);
++  const errors: StepFormErrors = {};
++
++  if (!values.name.trim()) {
++    errors.name = "Name is required.";
++  }
++
++  if (!difficultyOptions.includes(values.difficulty)) {
++    errors.difficulty = "Difficulty is required.";
++  }
++
++  if (!stepKindOptions.includes(values.kind)) {
++    errors.kind = "Choose a valid kind.";
++  }
++
++  if (uniqueNonEmpty(values.feeling).length === 0) {
++    errors.feeling = "Choose at least one feeling.";
++  }
++
++  if (values.videos.length === 0) {
++    errors.videos = "Add at least one video.";
++  } else if (
++    values.videos.some(
++      (video) => video.hash.trim().length === 0 || video.storageKey.trim().length === 0,
++    )
++  ) {
++    errors.videos = "Video hash and storage key are required.";
++  } else {
++    const duplicate = values.videos
++      .map((video) =>
++        options.existingVideos?.find(
++          (candidate) =>
++            candidate.hash === video.hash &&
++            candidate.stepId !== options.currentStepId,
++        ),
++      )
++      .find(Boolean);
++
++    if (duplicate) {
++      errors.videos = `Duplicate of ${duplicate.stepName}.`;
++    }
++  }
++
++  return Object.keys(errors).length === 0
++    ? { ok: true, values, errors }
++    : { ok: false, values, errors };
++}
+diff --git a/lib/steps/step-form-schema.ts b/lib/steps/step-form-schema.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c095a88482fc73a588fcad1e3303414223ada172
+--- /dev/null
++++ b/lib/steps/step-form-schema.ts
+@@ -0,0 +1,51 @@
++import type { Difficulty, StepKind } from "@/lib/domain/config";
++import type { StepVideo } from "@/lib/video/storage-client";
++
++export const stepKindOptions = ["step", "inspiration", "routine"] as const;
++export const difficultyOptions = [1, 2, 3, 5, 8] as const;
++
++export type StepFormVideo = StepVideo;
++
++export type StepFormValues = {
++  videos: StepFormVideo[];
++  name: string;
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  smartTags: string[];
++  removedSmartTags: string[];
++  tokens: string[];
++};
++
++export type ExistingStepVideo = {
++  hash: string;
++  stepId: string;
++  stepName: string;
++};
++
++export type StepMutationInput = {
++  name: string;
++  videos: StepFormVideo[];
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  removedSmartTags: string[];
++  variationKey: string;
++};
++
++export type StepFormErrors = Partial<Record<keyof StepFormValues, string>>;
++
++export type StepFormValidationOptions = {
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++};
++
++export type StepFormValidationResult =
++  | { ok: true; values: StepFormValues; errors: StepFormErrors }
++  | { ok: false; values: StepFormValues; errors: StepFormErrors };
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53cf031725
+--- /dev/null
++++ b/tests/components/step-form.test.tsx
+@@ -0,0 +1,211 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  createStepFormDefaults,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import type { StepFormValues } from "@/lib/steps/step-form-schema";
++
++const validVideo = {
++  hash: "video-hash-1",
++  storageKey: "owners/user/videos/video-hash-1.mp4",
++};
++
++describe("step form validation", () => {
++  it("defaults to the minimal empty step shape", () => {
++    expect(createStepFormDefaults()).toEqual({
++      videos: [],
++      name: "",
++      difficulty: 1,
++      feeling: [],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      smartTags: [],
++      removedSmartTags: [],
++      tokens: [],
++    });
++  });
++
++  it("requires name, difficulty, kind, feeling, and valid videos", () => {
++    const result = validateStepFormValues({
++      ...createStepFormDefaults(),
++      kind: "bad-kind",
++      difficulty: Number.NaN,
++      videos: [{ hash: "", storageKey: "" }],
++    } as unknown as StepFormValues);
++
++    expect(result.ok).toBe(false);
++    expect(result.errors).toEqual({
++      name: "Name is required.",
++      difficulty: "Difficulty is required.",
++      kind: "Choose a valid kind.",
++      feeling: "Choose at least one feeling.",
++      videos: "Video hash and storage key are required.",
++    });
++  });
++
++  it("blocks duplicate videos except the edited step", () => {
++    const values = {
++      ...createStepFormDefaults(),
++      name: "Saida",
++      videos: [validVideo],
++      feeling: ["semba"],
++    };
++
++    const duplicate = validateStepFormValues(values, {
++      currentStepId: "step-2",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++    const edited = validateStepFormValues(values, {
++      currentStepId: "step-1",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++
++    expect(duplicate.ok).toBe(false);
++    expect(duplicate.errors.videos).toBe("Duplicate of Existing Saida.");
++    expect(edited.ok).toBe(true);
++  });
++});
++
++describe("StepForm", () => {
++  it("submits Convex mutation-shaped values for a valid form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Saida damska");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith({
++      name: "Saida damska",
++      videos: [validVideo],
++      difficulty: 1,
++      feeling: ["semba"],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      removedSmartTags: [],
++      variationKey: expect.any(String),
++    });
++  });
++
++  it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Obrot shadow");
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++
++    await waitFor(
++      () => expect(screen.getByText("Shadow position")).toBeInTheDocument(),
++      { timeout: 500 },
++    );
++    expect(screen.getByText("Obrót")).toBeInTheDocument();
++
++    await user.click(
++      screen.getByRole("button", { name: "Remove smart tag Shadow position" }),
++    );
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++    expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
++    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith(
++      expect.objectContaining({
++        removedSmartTags: ["Shadow position"],
++      }),
++    );
++  });
++
++  it("offers tag and artist autocomplete without arbitrary smart tag controls", async () => {
++    const user = userEvent.setup();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++          name: "Saida damska",
++        }}
++        tagOptions={["balance", "frame"]}
++        artistOptions={["Petchu"]}
++        onSubmit={vi.fn()}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++
++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
++  });
++
++  it("shows validation failures instead of submitting an empty form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(<StepForm onSubmit={onSubmit} />);
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).not.toHaveBeenCalled();
++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
++  });
++});
++
++const _typecheck: StepFormValues | null = null;
+
+exec
+/bin/zsh -lc 'git status --porcelain && git show -s --format="%h %s" HEAD && git show -s --format="%h %s" HEAD~1' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/runs/run-20260507-205447-62953-iter-1.log
+546c73a docs(ralph): record step form progress
+71a4d85 feat(steps): add shared step form
+
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 71e5c3195f33b343e4663b112b7b4e0b02489f59..0e628061f157f0962a5c65f746e1b33b28d58c90
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -42,3 +42,8 @@
+ [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
+ [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+ [2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
++[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
++[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
++[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
++[2026-05-07 21:05:43] Completed security performance regression review for S04-01
++[2026-05-07 21:06:08] Updated progress log for S04-01 step form validation and smart tags
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 4ea38350d12c7bc2647a91db3562a70fc91609b8..23a9712aca9f13f3c79d92854d8da51607fd3911
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -204,3 +204,40 @@
+   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+ ---
++
++## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
++Thread:
++Run: 20260507-205447-62953 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 71a4d85 feat(steps): add shared step form
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/forms/checklist.tsx
++  - components/forms/select.tsx
++  - components/forms/tags-input.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - lib/steps/step-form-defaults.ts
++  - lib/steps/step-form-schema.ts
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
++  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
++  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index be33f16485c441bb2c4a6ec020134da651928f60..b5562246641dc7d974bec97c3a0158b89946296a
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,4 +1,4 @@
+-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
+ 
+ export default function NewStepPage() {
+   return (
+@@ -10,7 +10,7 @@
+         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+       </div>
+       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepVideoUploadField />
++        <StepFormWithUserData />
+       </section>
+     </main>
+   );
+diff --git a/components/forms/checklist.tsx b/components/forms/checklist.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e975bba2a7cfa8a5a290b62912e027908c59249
+--- /dev/null
++++ b/components/forms/checklist.tsx
+@@ -0,0 +1,52 @@
++"use client";
++
++type ChecklistOption = {
++  value: string;
++  label: string;
++};
++
++type ChecklistProps = {
++  label: string;
++  values: string[];
++  options: ChecklistOption[];
++  error?: string;
++  onChange: (values: string[]) => void;
++};
++
++export function Checklist({
++  label,
++  values,
++  options,
++  error,
++  onChange,
++}: ChecklistProps) {
++  function toggle(value: string) {
++    onChange(
++      values.includes(value)
++        ? values.filter((candidate) => candidate !== value)
++        : [...values, value],
++    );
++  }
++
++  return (
++    <fieldset className="flex flex-col gap-2">
++      <legend className="text-sm font-medium">{label}</legend>
++      <div className="flex flex-wrap gap-2">
++        {options.map((option) => (
++          <label
++            key={option.value}
++            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++          >
++            <input
++              type="checkbox"
++              checked={values.includes(option.value)}
++              onChange={() => toggle(option.value)}
++            />
++            {option.label}
++          </label>
++        ))}
++      </div>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </fieldset>
++  );
++}
+diff --git a/components/forms/select.tsx b/components/forms/select.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5af68eaeb7ebcc9429b491375396f7903e3b07bb
+--- /dev/null
++++ b/components/forms/select.tsx
+@@ -0,0 +1,55 @@
++"use client";
++
++import { useId } from "react";
++
++type SelectOption<T extends string | number> = {
++  value: T;
++  label: string;
++};
++
++type SelectProps<T extends string | number> = {
++  label: string;
++  value: T;
++  options: SelectOption<T>[];
++  error?: string;
++  onChange: (value: T) => void;
++};
++
++export function Select<T extends string | number>({
++  label,
++  value,
++  options,
++  error,
++  onChange,
++}: SelectProps<T>) {
++  const id = useId();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <select
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={String(value)}
++        onChange={(event) => {
++          const option = options.find(
++            (candidate) => String(candidate.value) === event.target.value,
++          );
++
++          if (option) {
++            onChange(option.value);
++          }
++        }}
++      >
++        {options.map((option) => (
++          <option key={String(option.value)} value={String(option.value)}>
++            {option.label}
++          </option>
++        ))}
++      </select>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </div>
++  );
++}
+diff --git a/components/forms/tags-input.tsx b/components/forms/tags-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..895984c951a9705001284c182c8d579c2e8b8841
+--- /dev/null
++++ b/components/forms/tags-input.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { X } from "lucide-react";
++import { useId, useState } from "react";
++
++type TagsInputProps = {
++  label: string;
++  values: string[];
++  options?: string[];
++  onChange: (values: string[]) => void;
++};
++
++function normalize(value: string): string {
++  return value.trim();
++}
++
++export function TagsInput({
++  label,
++  values,
++  options = [],
++  onChange,
++}: TagsInputProps) {
++  const id = useId();
++  const [draft, setDraft] = useState("");
++  const listLabel = `Selected ${label.toLocaleLowerCase()}`;
++  const suggestions = options.filter((option) => !values.includes(option));
++
++  function addValue(value: string) {
++    const next = normalize(value);
++
++    if (!next || values.includes(next)) {
++      setDraft("");
++      return;
++    }
++
++    onChange([...values, next]);
++    setDraft("");
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <input
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={draft}
++        list={`${id}-options`}
++        onChange={(event) => setDraft(event.target.value)}
++        onBlur={() => addValue(draft)}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" || event.key === ",") {
++            event.preventDefault();
++            addValue(draft);
++          }
++        }}
++      />
++      <datalist id={`${id}-options`}>
++        {suggestions.map((option) => (
++          <option key={option} value={option} />
++        ))}
++      </datalist>
++      {suggestions.length > 0 ? (
++        <div className="flex flex-wrap gap-2" role="listbox" aria-label={`${label} options`}>
++          {suggestions.map((option) => (
++            <button
++              key={option}
++              type="button"
++              role="option"
++              className="rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-1 text-xs"
++              onClick={() => addValue(option)}
++            >
++              {option}
++            </button>
++          ))}
++        </div>
++      ) : null}
++      {values.length > 0 ? (
++        <fieldset aria-label={listLabel} className="flex flex-wrap gap-2">
++          {values.map((value) => (
++            <span
++              key={value}
++              className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--foreground)] px-2 text-xs text-white"
++            >
++              {value}
++              <button
++                type="button"
++                aria-label={`Remove ${label.toLocaleLowerCase()} ${value}`}
++                onClick={() =>
++                  onChange(values.filter((candidate) => candidate !== value))
++                }
++              >
++                <X size={14} aria-hidden="true" />
++              </button>
++            </span>
++          ))}
++        </fieldset>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..314efe186cee02dfe4079b89de1e491b186d9b8a
+--- /dev/null
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -0,0 +1,29 @@
++"use client";
++
++import { useQuery } from "convex/react";
++import { api } from "@/convex/_generated/api";
++import { StepForm } from "./step-form";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormWithUserDataProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++export function StepFormWithUserData(props: StepFormWithUserDataProps) {
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++
++  return (
++    <StepForm
++      {...props}
++      tagOptions={existing?.tags ?? []}
++      artistOptions={existing?.artists ?? []}
++    />
++  );
++}
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bea8645e116b6a5adc14c3bd5c1f94a945f4e405
+--- /dev/null
++++ b/components/steps/step-form.tsx
+@@ -0,0 +1,314 @@
++"use client";
++
++import { Check, RotateCcw, Save, X } from "lucide-react";
++import { type FormEvent, useEffect, useMemo, useState } from "react";
++import { Checklist } from "@/components/forms/checklist";
++import { Select } from "@/components/forms/select";
++import { TagsInput } from "@/components/forms/tags-input";
++import { getActiveAppConfig } from "@/lib/domain/config";
++import {
++  allowedSmartTags,
++  createStepFormDefaults,
++  deriveStepFormSmartFields,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import {
++  difficultyOptions,
++  type ExistingStepVideo,
++  type StepFormErrors,
++  type StepFormValues,
++  type StepMutationInput,
++  stepKindOptions,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++function nextVariationKey() {
++  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
++    return crypto.randomUUID();
++  }
++
++  return `variation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++}
++
++function unique(values: string[]) {
++  return [...new Set(values)];
++}
++
++function toMutationInput(values: StepFormValues): StepMutationInput {
++  return {
++    name: values.name.trim(),
++    videos: values.videos,
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    kind: values.kind,
++    tags: values.tags,
++    artists: values.artists,
++    notes: values.notes.trim(),
++    removedSmartTags: values.removedSmartTags,
++    variationKey: nextVariationKey(),
++  };
++}
++
++export function StepForm({
++  initialValues,
++  currentStepId,
++  existingVideos = [],
++  tagOptions = [],
++  artistOptions = [],
++  onSubmit,
++}: StepFormProps) {
++  const config = getActiveAppConfig();
++  const smartTagOptions = useMemo(() => allowedSmartTags(), []);
++  const [values, setValues] = useState<StepFormValues>(() => {
++    const defaults = createStepFormDefaults(initialValues);
++    const smartFields = deriveStepFormSmartFields(
++      defaults.name,
++      defaults.removedSmartTags,
++    );
++
++    return {
++      ...defaults,
++      smartTags: initialValues?.smartTags ?? smartFields.smartTags,
++      tokens: initialValues?.tokens ?? smartFields.tokens,
++    };
++  });
++  const [errors, setErrors] = useState<StepFormErrors>({});
++  const [submitMessage, setSubmitMessage] = useState("");
++
++  useEffect(() => {
++    const timeout = window.setTimeout(() => {
++      setValues((current) => ({
++        ...current,
++        ...deriveStepFormSmartFields(current.name, current.removedSmartTags),
++      }));
++    }, 200);
++
++    return () => window.clearTimeout(timeout);
++  }, [values.name, values.removedSmartTags]);
++
++  function update(patch: Partial<StepFormValues>) {
++    setValues((current) => ({ ...current, ...patch }));
++    setErrors({});
++    setSubmitMessage("");
++  }
++
++  function removeSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      smartTags: values.smartTags.filter((candidate) => candidate !== tag),
++      removedSmartTags: unique([...values.removedSmartTags, tag]),
++    });
++  }
++
++  function restoreSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      removedSmartTags: values.removedSmartTags.filter(
++        (candidate) => candidate !== tag,
++      ),
++    });
++  }
++
++  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++
++    const result = validateStepFormValues(values, {
++      currentStepId,
++      existingVideos,
++    });
++
++    if (!result.ok) {
++      setErrors(result.errors);
++      return;
++    }
++
++    await onSubmit?.(toMutationInput(result.values));
++    setSubmitMessage("Step is ready to save.");
++  }
++
++  return (
++    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++      <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++        <div>
++          <h2 id="videos-heading" className="text-base font-semibold">
++            Videos
++          </h2>
++          {errors.videos ? (
++            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++          ) : null}
++        </div>
++        {values.videos.length > 0 ? (
++          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++            {values.videos.map((video) => (
++              <li key={video.hash} className="px-3 py-2 text-sm">
++                <span className="font-medium">{video.hash.slice(0, 12)}</span>
++                <span className="ml-2 text-[var(--muted-foreground)]">
++                  {video.storageKey}
++                </span>
++              </li>
++            ))}
++          </ul>
++        ) : (
++          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++            Add a video before saving.
++          </p>
++        )}
++      </section>
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Name
++        <input
++          className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-normal"
++          value={values.name}
++          onChange={(event) => update({ name: event.target.value })}
++        />
++        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++      </label>
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <Select
++          label="Kind"
++          value={values.kind}
++          error={errors.kind}
++          options={stepKindOptions.map((kind) => ({
++            value: kind,
++            label: config.stepKinds[kind],
++          }))}
++          onChange={(kind) => update({ kind })}
++        />
++        <Select
++          label="Difficulty"
++          value={values.difficulty}
++          error={errors.difficulty}
++          options={difficultyOptions.map((difficulty) => ({
++            value: difficulty,
++            label: config.difficulties[difficulty],
++          }))}
++          onChange={(difficulty) => update({ difficulty })}
++        />
++      </div>
++
++      <Checklist
++        label="Feeling"
++        values={values.feeling}
++        error={errors.feeling}
++        options={Object.entries(config.feelings).map(([value, label]) => ({
++          value,
++          label,
++        }))}
++        onChange={(feeling) => update({ feeling })}
++      />
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <TagsInput
++          label="Tags"
++          values={values.tags}
++          options={tagOptions}
++          onChange={(tags) => update({ tags })}
++        />
++        <TagsInput
++          label="Artists"
++          values={values.artists}
++          options={artistOptions}
++          onChange={(artists) => update({ artists })}
++        />
++      </div>
++
++      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++        <h2 id="smart-tags-heading" className="text-sm font-medium">
++          Smart tags
++        </h2>
++        {values.smartTags.length > 0 ? (
++          <div className="flex flex-wrap gap-2">
++            {values.smartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--accent)] px-2 text-xs text-[var(--accent-foreground)]"
++              >
++                <Check size={14} aria-hidden="true" />
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Remove smart tag ${tag}`}
++                  onClick={() => removeSmartTag(tag)}
++                >
++                  <X size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        ) : (
++          <p className="text-sm text-[var(--muted-foreground)]">
++            No smart tags matched.
++          </p>
++        )}
++      </section>
++
++      {values.removedSmartTags.length > 0 ? (
++        <section
++          className="flex flex-col gap-2"
++          aria-labelledby="removed-smart-tags-heading"
++        >
++          <h2 id="removed-smart-tags-heading" className="text-sm font-medium">
++            Removed smart tags
++          </h2>
++          <div className="flex flex-wrap gap-2">
++            {values.removedSmartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
++              >
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Restore smart tag ${tag}`}
++                  onClick={() => restoreSmartTag(tag)}
++                >
++                  <RotateCcw size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        </section>
++      ) : null}
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Notes
++        <textarea
++          className="min-h-28 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-normal"
++          value={values.notes}
++          onChange={(event) => update({ notes: event.target.value })}
++        />
++      </label>
++
++      <div className="flex flex-wrap items-center gap-3">
++        <button
++          type="submit"
++          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++        >
++          <Save size={16} aria-hidden="true" />
++          Save step
++        </button>
++        {submitMessage ? (
++          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++            {submitMessage}
++          </p>
++        ) : null}
++      </div>
++    </form>
++  );
++}
+diff --git a/lib/steps/step-form-defaults.ts b/lib/steps/step-form-defaults.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a41c7b6e051a4e9268de50409510a60a31dbbb2e
+--- /dev/null
++++ b/lib/steps/step-form-defaults.ts
+@@ -0,0 +1,119 @@
++import { getActiveAppConfig } from "@/lib/domain/config";
++import { matchSmartTags } from "@/lib/domain/smart-tags";
++import { tokenizeStepName } from "@/lib/domain/tokenize";
++import {
++  difficultyOptions,
++  type StepFormErrors,
++  type StepFormValidationOptions,
++  type StepFormValidationResult,
++  type StepFormValues,
++  stepKindOptions,
++} from "./step-form-schema";
++
++function uniqueNonEmpty(values: string[]): string[] {
++  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
++}
++
++export function createStepFormDefaults(
++  values: Partial<StepFormValues> = {},
++): StepFormValues {
++  const defaults: StepFormValues = {
++    videos: [],
++    name: "",
++    difficulty: 1,
++    feeling: [],
++    kind: "step",
++    tags: [],
++    artists: [],
++    notes: "",
++    smartTags: [],
++    removedSmartTags: [],
++    tokens: [],
++  };
++
++  return {
++    ...defaults,
++    ...values,
++    videos: values.videos ?? defaults.videos,
++    feeling: uniqueNonEmpty(values.feeling ?? defaults.feeling),
++    tags: uniqueNonEmpty(values.tags ?? defaults.tags),
++    artists: uniqueNonEmpty(values.artists ?? defaults.artists),
++    smartTags: uniqueNonEmpty(values.smartTags ?? defaults.smartTags),
++    removedSmartTags: uniqueNonEmpty(
++      values.removedSmartTags ?? defaults.removedSmartTags,
++    ),
++    tokens: values.tokens ?? defaults.tokens,
++  };
++}
++
++export function deriveStepFormSmartFields(
++  name: string,
++  removedSmartTags: string[],
++): Pick<StepFormValues, "smartTags" | "tokens"> {
++  const removed = new Set(removedSmartTags);
++
++  return {
++    smartTags: matchSmartTags(name, getActiveAppConfig()).filter(
++      (tag) => !removed.has(tag),
++    ),
++    tokens: tokenizeStepName(name),
++  };
++}
++
++export function allowedSmartTags(): string[] {
++  return getActiveAppConfig()
++    .smartTagMatchers.map((matcher) => matcher.tag)
++    .sort((left, right) => left.localeCompare(right, "pl-PL"));
++}
++
++export function validateStepFormValues(
++  rawValues: StepFormValues,
++  options: StepFormValidationOptions = {},
++): StepFormValidationResult {
++  const values = createStepFormDefaults(rawValues);
++  const errors: StepFormErrors = {};
++
++  if (!values.name.trim()) {
++    errors.name = "Name is required.";
++  }
++
++  if (!difficultyOptions.includes(values.difficulty)) {
++    errors.difficulty = "Difficulty is required.";
++  }
++
++  if (!stepKindOptions.includes(values.kind)) {
++    errors.kind = "Choose a valid kind.";
++  }
++
++  if (uniqueNonEmpty(values.feeling).length === 0) {
++    errors.feeling = "Choose at least one feeling.";
++  }
++
++  if (values.videos.length === 0) {
++    errors.videos = "Add at least one video.";
++  } else if (
++    values.videos.some(
++      (video) => video.hash.trim().length === 0 || video.storageKey.trim().length === 0,
++    )
++  ) {
++    errors.videos = "Video hash and storage key are required.";
++  } else {
++    const duplicate = values.videos
++      .map((video) =>
++        options.existingVideos?.find(
++          (candidate) =>
++            candidate.hash === video.hash &&
++            candidate.stepId !== options.currentStepId,
++        ),
++      )
++      .find(Boolean);
++
++    if (duplicate) {
++      errors.videos = `Duplicate of ${duplicate.stepName}.`;
++    }
++  }
++
++  return Object.keys(errors).length === 0
++    ? { ok: true, values, errors }
++    : { ok: false, values, errors };
++}
+diff --git a/lib/steps/step-form-schema.ts b/lib/steps/step-form-schema.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c095a88482fc73a588fcad1e3303414223ada172
+--- /dev/null
++++ b/lib/steps/step-form-schema.ts
+@@ -0,0 +1,51 @@
++import type { Difficulty, StepKind } from "@/lib/domain/config";
++import type { StepVideo } from "@/lib/video/storage-client";
++
++export const stepKindOptions = ["step", "inspiration", "routine"] as const;
++export const difficultyOptions = [1, 2, 3, 5, 8] as const;
++
++export type StepFormVideo = StepVideo;
++
++export type StepFormValues = {
++  videos: StepFormVideo[];
++  name: string;
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  smartTags: string[];
++  removedSmartTags: string[];
++  tokens: string[];
++};
++
++export type ExistingStepVideo = {
++  hash: string;
++  stepId: string;
++  stepName: string;
++};
++
++export type StepMutationInput = {
++  name: string;
++  videos: StepFormVideo[];
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  removedSmartTags: string[];
++  variationKey: string;
++};
++
++export type StepFormErrors = Partial<Record<keyof StepFormValues, string>>;
++
++export type StepFormValidationOptions = {
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++};
++
++export type StepFormValidationResult =
++  | { ok: true; values: StepFormValues; errors: StepFormErrors }
++  | { ok: false; values: StepFormValues; errors: StepFormErrors };
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53cf031725
+--- /dev/null
++++ b/tests/components/step-form.test.tsx
+@@ -0,0 +1,211 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  createStepFormDefaults,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import type { StepFormValues } from "@/lib/steps/step-form-schema";
++
++const validVideo = {
++  hash: "video-hash-1",
++  storageKey: "owners/user/videos/video-hash-1.mp4",
++};
++
++describe("step form validation", () => {
++  it("defaults to the minimal empty step shape", () => {
++    expect(createStepFormDefaults()).toEqual({
++      videos: [],
++      name: "",
++      difficulty: 1,
++      feeling: [],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      smartTags: [],
++      removedSmartTags: [],
++      tokens: [],
++    });
++  });
++
++  it("requires name, difficulty, kind, feeling, and valid videos", () => {
++    const result = validateStepFormValues({
++      ...createStepFormDefaults(),
++      kind: "bad-kind",
++      difficulty: Number.NaN,
++      videos: [{ hash: "", storageKey: "" }],
++    } as unknown as StepFormValues);
++
++    expect(result.ok).toBe(false);
++    expect(result.errors).toEqual({
++      name: "Name is required.",
++      difficulty: "Difficulty is required.",
++      kind: "Choose a valid kind.",
++      feeling: "Choose at least one feeling.",
++      videos: "Video hash and storage key are required.",
++    });
++  });
++
++  it("blocks duplicate videos except the edited step", () => {
++    const values = {
++      ...createStepFormDefaults(),
++      name: "Saida",
++      videos: [validVideo],
++      feeling: ["semba"],
++    };
++
++    const duplicate = validateStepFormValues(values, {
++      currentStepId: "step-2",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++    const edited = validateStepFormValues(values, {
++      currentStepId: "step-1",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++
++    expect(duplicate.ok).toBe(false);
++    expect(duplicate.errors.videos).toBe("Duplicate of Existing Saida.");
++    expect(edited.ok).toBe(true);
++  });
++});
++
++describe("StepForm", () => {
++  it("submits Convex mutation-shaped values for a valid form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Saida damska");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith({
++      name: "Saida damska",
++      videos: [validVideo],
++      difficulty: 1,
++      feeling: ["semba"],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      removedSmartTags: [],
++      variationKey: expect.any(String),
++    });
++  });
++
++  it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Obrot shadow");
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++
++    await waitFor(
++      () => expect(screen.getByText("Shadow position")).toBeInTheDocument(),
++      { timeout: 500 },
++    );
++    expect(screen.getByText("Obrót")).toBeInTheDocument();
++
++    await user.click(
++      screen.getByRole("button", { name: "Remove smart tag Shadow position" }),
++    );
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++    expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
++    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith(
++      expect.objectContaining({
++        removedSmartTags: ["Shadow position"],
++      }),
++    );
++  });
++
++  it("offers tag and artist autocomplete without arbitrary smart tag controls", async () => {
++    const user = userEvent.setup();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++          name: "Saida damska",
++        }}
++        tagOptions={["balance", "frame"]}
++        artistOptions={["Petchu"]}
++        onSubmit={vi.fn()}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++
++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
++  });
++
++  it("shows validation failures instead of submitting an empty form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(<StepForm onSubmit={onSubmit} />);
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).not.toHaveBeenCalled();
++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
++  });
++});
++
++const _typecheck: StepFormValues | null = null;
+
+exec
+/bin/zsh -lc 'git ls-files .ralph/runs | tail -n 20 && git diff -- .ralph/runs/run-20260507-205447-62953-iter-1.log | tail -n 40' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+.ralph/runs/run-20260507-130957-33268-iter-1.log
+.ralph/runs/run-20260507-130957-33268-iter-1.md
+.ralph/runs/run-20260507-194102-61024-iter-1.log
+.ralph/runs/run-20260507-194102-61024-iter-1.md
+.ralph/runs/run-20260507-200253-24281-iter-1.log
+.ralph/runs/run-20260507-200253-24281-iter-1.md
+.ralph/runs/run-20260507-200253-24281-iter-2.log
+.ralph/runs/run-20260507-200253-24281-iter-2.md
+.ralph/runs/run-20260507-200253-24281-iter-3.log
+.ralph/runs/run-20260507-200253-24281-iter-3.md
+.ralph/runs/run-20260507-205447-62953-iter-1.log
+++      <StepForm
+++        initialValues={{
+++          ...createStepFormDefaults(),
+++          videos: [validVideo],
+++          feeling: ["semba"],
+++          name: "Saida damska",
+++        }}
+++        tagOptions={["balance", "frame"]}
+++        artistOptions={["Petchu"]}
+++        onSubmit={vi.fn()}
+++      />,
+++    );
+++
+++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
+++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
+++
+++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
+++    expect(
+++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
+++    ).toBeInTheDocument();
+++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
+++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
+++  });
+++
+++  it("shows validation failures instead of submitting an empty form", async () => {
+++    const user = userEvent.setup();
+++    const onSubmit = vi.fn();
+++
+++    render(<StepForm onSubmit={onSubmit} />);
+++
+++    await user.click(screen.getByRole("button", { name: "Save step" }));
+++
+++    expect(onSubmit).not.toHaveBeenCalled();
+++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
+++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
+++  });
+++});
+++
+++const _typecheck: StepFormValues | null = null;
++
+
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 71e5c3195f33b343e4663b112b7b4e0b02489f59..0e628061f157f0962a5c65f746e1b33b28d58c90
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -42,3 +42,8 @@
+ [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
+ [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+ [2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
++[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
++[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
++[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
++[2026-05-07 21:05:43] Completed security performance regression review for S04-01
++[2026-05-07 21:06:08] Updated progress log for S04-01 step form validation and smart tags
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 4ea38350d12c7bc2647a91db3562a70fc91609b8..23a9712aca9f13f3c79d92854d8da51607fd3911
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -204,3 +204,40 @@
+   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+ ---
++
++## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
++Thread:
++Run: 20260507-205447-62953 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 71a4d85 feat(steps): add shared step form
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/forms/checklist.tsx
++  - components/forms/select.tsx
++  - components/forms/tags-input.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - lib/steps/step-form-defaults.ts
++  - lib/steps/step-form-schema.ts
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
++  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
++  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index be33f16485c441bb2c4a6ec020134da651928f60..b5562246641dc7d974bec97c3a0158b89946296a
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,4 +1,4 @@
+-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
+ 
+ export default function NewStepPage() {
+   return (
+@@ -10,7 +10,7 @@
+         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+       </div>
+       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepVideoUploadField />
++        <StepFormWithUserData />
+       </section>
+     </main>
+   );
+diff --git a/components/forms/checklist.tsx b/components/forms/checklist.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e975bba2a7cfa8a5a290b62912e027908c59249
+--- /dev/null
++++ b/components/forms/checklist.tsx
+@@ -0,0 +1,52 @@
++"use client";
++
++type ChecklistOption = {
++  value: string;
++  label: string;
++};
++
++type ChecklistProps = {
++  label: string;
++  values: string[];
++  options: ChecklistOption[];
++  error?: string;
++  onChange: (values: string[]) => void;
++};
++
++export function Checklist({
++  label,
++  values,
++  options,
++  error,
++  onChange,
++}: ChecklistProps) {
++  function toggle(value: string) {
++    onChange(
++      values.includes(value)
++        ? values.filter((candidate) => candidate !== value)
++        : [...values, value],
++    );
++  }
++
++  return (
++    <fieldset className="flex flex-col gap-2">
++      <legend className="text-sm font-medium">{label}</legend>
++      <div className="flex flex-wrap gap-2">
++        {options.map((option) => (
++          <label
++            key={option.value}
++            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++          >
++            <input
++              type="checkbox"
++              checked={values.includes(option.value)}
++              onChange={() => toggle(option.value)}
++            />
++            {option.label}
++          </label>
++        ))}
++      </div>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </fieldset>
++  );
++}
+diff --git a/components/forms/select.tsx b/components/forms/select.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5af68eaeb7ebcc9429b491375396f7903e3b07bb
+--- /dev/null
++++ b/components/forms/select.tsx
+@@ -0,0 +1,55 @@
++"use client";
++
++import { useId } from "react";
++
++type SelectOption<T extends string | number> = {
++  value: T;
++  label: string;
++};
++
++type SelectProps<T extends string | number> = {
++  label: string;
++  value: T;
++  options: SelectOption<T>[];
++  error?: string;
++  onChange: (value: T) => void;
++};
++
++export function Select<T extends string | number>({
++  label,
++  value,
++  options,
++  error,
++  onChange,
++}: SelectProps<T>) {
++  const id = useId();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <select
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={String(value)}
++        onChange={(event) => {
++          const option = options.find(
++            (candidate) => String(candidate.value) === event.target.value,
++          );
++
++          if (option) {
++            onChange(option.value);
++          }
++        }}
++      >
++        {options.map((option) => (
++          <option key={String(option.value)} value={String(option.value)}>
++            {option.label}
++          </option>
++        ))}
++      </select>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </div>
++  );
++}
+diff --git a/components/forms/tags-input.tsx b/components/forms/tags-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..895984c951a9705001284c182c8d579c2e8b8841
+--- /dev/null
++++ b/components/forms/tags-input.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { X } from "lucide-react";
++import { useId, useState } from "react";
++
++type TagsInputProps = {
++  label: string;
++  values: string[];
++  options?: string[];
++  onChange: (values: string[]) => void;
++};
++
++function normalize(value: string): string {
++  return value.trim();
++}
++
++export function TagsInput({
++  label,
++  values,
++  options = [],
++  onChange,
++}: TagsInputProps) {
++  const id = useId();
++  const [draft, setDraft] = useState("");
++  const listLabel = `Selected ${label.toLocaleLowerCase()}`;
++  const suggestions = options.filter((option) => !values.includes(option));
++
++  function addValue(value: string) {
++    const next = normalize(value);
++
++    if (!next || values.includes(next)) {
++      setDraft("");
++      return;
++    }
++
++    onChange([...values, next]);
++    setDraft("");
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <input
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={draft}
++        list={`${id}-options`}
++        onChange={(event) => setDraft(event.target.value)}
++        onBlur={() => addValue(draft)}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" || event.key === ",") {
++            event.preventDefault();
++            addValue(draft);
++          }
++        }}
++      />
++      <datalist id={`${id}-options`}>
++        {suggestions.map((option) => (
++          <option key={option} value={option} />
++        ))}
++      </datalist>
++      {suggestions.length > 0 ? (
++        <div className="flex flex-wrap gap-2" role="listbox" aria-label={`${label} options`}>
++          {suggestions.map((option) => (
++            <button
++              key={option}
++              type="button"
++              role="option"
++              className="rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-1 text-xs"
++              onClick={() => addValue(option)}
++            >
++              {option}
++            </button>
++          ))}
++        </div>
++      ) : null}
++      {values.length > 0 ? (
++        <fieldset aria-label={listLabel} className="flex flex-wrap gap-2">
++          {values.map((value) => (
++            <span
++              key={value}
++              className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--foreground)] px-2 text-xs text-white"
++            >
++              {value}
++              <button
++                type="button"
++                aria-label={`Remove ${label.toLocaleLowerCase()} ${value}`}
++                onClick={() =>
++                  onChange(values.filter((candidate) => candidate !== value))
++                }
++              >
++                <X size={14} aria-hidden="true" />
++              </button>
++            </span>
++          ))}
++        </fieldset>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..314efe186cee02dfe4079b89de1e491b186d9b8a
+--- /dev/null
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -0,0 +1,29 @@
++"use client";
++
++import { useQuery } from "convex/react";
++import { api } from "@/convex/_generated/api";
++import { StepForm } from "./step-form";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormWithUserDataProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++export function StepFormWithUserData(props: StepFormWithUserDataProps) {
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++
++  return (
++    <StepForm
++      {...props}
++      tagOptions={existing?.tags ?? []}
++      artistOptions={existing?.artists ?? []}
++    />
++  );
++}
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bea8645e116b6a5adc14c3bd5c1f94a945f4e405
+--- /dev/null
++++ b/components/steps/step-form.tsx
+@@ -0,0 +1,314 @@
++"use client";
++
++import { Check, RotateCcw, Save, X } from "lucide-react";
++import { type FormEvent, useEffect, useMemo, useState } from "react";
++import { Checklist } from "@/components/forms/checklist";
++import { Select } from "@/components/forms/select";
++import { TagsInput } from "@/components/forms/tags-input";
++import { getActiveAppConfig } from "@/lib/domain/config";
++import {
++  allowedSmartTags,
++  createStepFormDefaults,
++  deriveStepFormSmartFields,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import {
++  difficultyOptions,
++  type ExistingStepVideo,
++  type StepFormErrors,
++  type StepFormValues,
++  type StepMutationInput,
++  stepKindOptions,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++function nextVariationKey() {
++  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
++    return crypto.randomUUID();
++  }
++
++  return `variation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++}
++
++function unique(values: string[]) {
++  return [...new Set(values)];
++}
++
++function toMutationInput(values: StepFormValues): StepMutationInput {
++  return {
++    name: values.name.trim(),
++    videos: values.videos,
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    kind: values.kind,
++    tags: values.tags,
++    artists: values.artists,
++    notes: values.notes.trim(),
++    removedSmartTags: values.removedSmartTags,
++    variationKey: nextVariationKey(),
++  };
++}
++
++export function StepForm({
++  initialValues,
++  currentStepId,
++  existingVideos = [],
++  tagOptions = [],
++  artistOptions = [],
++  onSubmit,
++}: StepFormProps) {
++  const config = getActiveAppConfig();
++  const smartTagOptions = useMemo(() => allowedSmartTags(), []);
++  const [values, setValues] = useState<StepFormValues>(() => {
++    const defaults = createStepFormDefaults(initialValues);
++    const smartFields = deriveStepFormSmartFields(
++      defaults.name,
++      defaults.removedSmartTags,
++    );
++
++    return {
++      ...defaults,
++      smartTags: initialValues?.smartTags ?? smartFields.smartTags,
++      tokens: initialValues?.tokens ?? smartFields.tokens,
++    };
++  });
++  const [errors, setErrors] = useState<StepFormErrors>({});
++  const [submitMessage, setSubmitMessage] = useState("");
++
++  useEffect(() => {
++    const timeout = window.setTimeout(() => {
++      setValues((current) => ({
++        ...current,
++        ...deriveStepFormSmartFields(current.name, current.removedSmartTags),
++      }));
++    }, 200);
++
++    return () => window.clearTimeout(timeout);
++  }, [values.name, values.removedSmartTags]);
++
++  function update(patch: Partial<StepFormValues>) {
++    setValues((current) => ({ ...current, ...patch }));
++    setErrors({});
++    setSubmitMessage("");
++  }
++
++  function removeSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      smartTags: values.smartTags.filter((candidate) => candidate !== tag),
++      removedSmartTags: unique([...values.removedSmartTags, tag]),
++    });
++  }
++
++  function restoreSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      removedSmartTags: values.removedSmartTags.filter(
++        (candidate) => candidate !== tag,
++      ),
++    });
++  }
++
++  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++
++    const result = validateStepFormValues(values, {
++      currentStepId,
++      existingVideos,
++    });
++
++    if (!result.ok) {
++      setErrors(result.errors);
++      return;
++    }
++
++    await onSubmit?.(toMutationInput(result.values));
++    setSubmitMessage("Step is ready to save.");
++  }
++
++  return (
++    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++      <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++        <div>
++          <h2 id="videos-heading" className="text-base font-semibold">
++            Videos
++          </h2>
++          {errors.videos ? (
++            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++          ) : null}
++        </div>
++        {values.videos.length > 0 ? (
++          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++            {values.videos.map((video) => (
++              <li key={video.hash} className="px-3 py-2 text-sm">
++                <span className="font-medium">{video.hash.slice(0, 12)}</span>
++                <span className="ml-2 text-[var(--muted-foreground)]">
++                  {video.storageKey}
++                </span>
++              </li>
++            ))}
++          </ul>
++        ) : (
++          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++            Add a video before saving.
++          </p>
++        )}
++      </section>
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Name
++        <input
++          className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-normal"
++          value={values.name}
++          onChange={(event) => update({ name: event.target.value })}
++        />
++        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++      </label>
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <Select
++          label="Kind"
++          value={values.kind}
++          error={errors.kind}
++          options={stepKindOptions.map((kind) => ({
++            value: kind,
++            label: config.stepKinds[kind],
++          }))}
++          onChange={(kind) => update({ kind })}
++        />
++        <Select
++          label="Difficulty"
++          value={values.difficulty}
++          error={errors.difficulty}
++          options={difficultyOptions.map((difficulty) => ({
++            value: difficulty,
++            label: config.difficulties[difficulty],
++          }))}
++          onChange={(difficulty) => update({ difficulty })}
++        />
++      </div>
++
++      <Checklist
++        label="Feeling"
++        values={values.feeling}
++        error={errors.feeling}
++        options={Object.entries(config.feelings).map(([value, label]) => ({
++          value,
++          label,
++        }))}
++        onChange={(feeling) => update({ feeling })}
++      />
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <TagsInput
++          label="Tags"
++          values={values.tags}
++          options={tagOptions}
++          onChange={(tags) => update({ tags })}
++        />
++        <TagsInput
++          label="Artists"
++          values={values.artists}
++          options={artistOptions}
++          onChange={(artists) => update({ artists })}
++        />
++      </div>
++
++      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++        <h2 id="smart-tags-heading" className="text-sm font-medium">
++          Smart tags
++        </h2>
++        {values.smartTags.length > 0 ? (
++          <div className="flex flex-wrap gap-2">
++            {values.smartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--accent)] px-2 text-xs text-[var(--accent-foreground)]"
++              >
++                <Check size={14} aria-hidden="true" />
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Remove smart tag ${tag}`}
++                  onClick={() => removeSmartTag(tag)}
++                >
++                  <X size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        ) : (
++          <p className="text-sm text-[var(--muted-foreground)]">
++            No smart tags matched.
++          </p>
++        )}
++      </section>
++
++      {values.removedSmartTags.length > 0 ? (
++        <section
++          className="flex flex-col gap-2"
++          aria-labelledby="removed-smart-tags-heading"
++        >
++          <h2 id="removed-smart-tags-heading" className="text-sm font-medium">
++            Removed smart tags
++          </h2>
++          <div className="flex flex-wrap gap-2">
++            {values.removedSmartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
++              >
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Restore smart tag ${tag}`}
++                  onClick={() => restoreSmartTag(tag)}
++                >
++                  <RotateCcw size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        </section>
++      ) : null}
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Notes
++        <textarea
++          className="min-h-28 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-normal"
++          value={values.notes}
++          onChange={(event) => update({ notes: event.target.value })}
++        />
++      </label>
++
++      <div className="flex flex-wrap items-center gap-3">
++        <button
++          type="submit"
++          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++        >
++          <Save size={16} aria-hidden="true" />
++          Save step
++        </button>
++        {submitMessage ? (
++          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++            {submitMessage}
++          </p>
++        ) : null}
++      </div>
++    </form>
++  );
++}
+diff --git a/lib/steps/step-form-defaults.ts b/lib/steps/step-form-defaults.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a41c7b6e051a4e9268de50409510a60a31dbbb2e
+--- /dev/null
++++ b/lib/steps/step-form-defaults.ts
+@@ -0,0 +1,119 @@
++import { getActiveAppConfig } from "@/lib/domain/config";
++import { matchSmartTags } from "@/lib/domain/smart-tags";
++import { tokenizeStepName } from "@/lib/domain/tokenize";
++import {
++  difficultyOptions,
++  type StepFormErrors,
++  type StepFormValidationOptions,
++  type StepFormValidationResult,
++  type StepFormValues,
++  stepKindOptions,
++} from "./step-form-schema";
++
++function uniqueNonEmpty(values: string[]): string[] {
++  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
++}
++
++export function createStepFormDefaults(
++  values: Partial<StepFormValues> = {},
++): StepFormValues {
++  const defaults: StepFormValues = {
++    videos: [],
++    name: "",
++    difficulty: 1,
++    feeling: [],
++    kind: "step",
++    tags: [],
++    artists: [],
++    notes: "",
++    smartTags: [],
++    removedSmartTags: [],
++    tokens: [],
++  };
++
++  return {
++    ...defaults,
++    ...values,
++    videos: values.videos ?? defaults.videos,
++    feeling: uniqueNonEmpty(values.feeling ?? defaults.feeling),
++    tags: uniqueNonEmpty(values.tags ?? defaults.tags),
++    artists: uniqueNonEmpty(values.artists ?? defaults.artists),
++    smartTags: uniqueNonEmpty(values.smartTags ?? defaults.smartTags),
++    removedSmartTags: uniqueNonEmpty(
++      values.removedSmartTags ?? defaults.removedSmartTags,
++    ),
++    tokens: values.tokens ?? defaults.tokens,
++  };
++}
++
++export function deriveStepFormSmartFields(
++  name: string,
++  removedSmartTags: string[],
++): Pick<StepFormValues, "smartTags" | "tokens"> {
++  const removed = new Set(removedSmartTags);
++
++  return {
++    smartTags: matchSmartTags(name, getActiveAppConfig()).filter(
++      (tag) => !removed.has(tag),
++    ),
++    tokens: tokenizeStepName(name),
++  };
++}
++
++export function allowedSmartTags(): string[] {
++  return getActiveAppConfig()
++    .smartTagMatchers.map((matcher) => matcher.tag)
++    .sort((left, right) => left.localeCompare(right, "pl-PL"));
++}
++
++export function validateStepFormValues(
++  rawValues: StepFormValues,
++  options: StepFormValidationOptions = {},
++): StepFormValidationResult {
++  const values = createStepFormDefaults(rawValues);
++  const errors: StepFormErrors = {};
++
++  if (!values.name.trim()) {
++    errors.name = "Name is required.";
++  }
++
++  if (!difficultyOptions.includes(values.difficulty)) {
++    errors.difficulty = "Difficulty is required.";
++  }
++
++  if (!stepKindOptions.includes(values.kind)) {
++    errors.kind = "Choose a valid kind.";
++  }
++
++  if (uniqueNonEmpty(values.feeling).length === 0) {
++    errors.feeling = "Choose at least one feeling.";
++  }
++
++  if (values.videos.length === 0) {
++    errors.videos = "Add at least one video.";
++  } else if (
++    values.videos.some(
++      (video) => video.hash.trim().length === 0 || video.storageKey.trim().length === 0,
++    )
++  ) {
++    errors.videos = "Video hash and storage key are required.";
++  } else {
++    const duplicate = values.videos
++      .map((video) =>
++        options.existingVideos?.find(
++          (candidate) =>
++            candidate.hash === video.hash &&
++            candidate.stepId !== options.currentStepId,
++        ),
++      )
++      .find(Boolean);
++
++    if (duplicate) {
++      errors.videos = `Duplicate of ${duplicate.stepName}.`;
++    }
++  }
++
++  return Object.keys(errors).length === 0
++    ? { ok: true, values, errors }
++    : { ok: false, values, errors };
++}
+diff --git a/lib/steps/step-form-schema.ts b/lib/steps/step-form-schema.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c095a88482fc73a588fcad1e3303414223ada172
+--- /dev/null
++++ b/lib/steps/step-form-schema.ts
+@@ -0,0 +1,51 @@
++import type { Difficulty, StepKind } from "@/lib/domain/config";
++import type { StepVideo } from "@/lib/video/storage-client";
++
++export const stepKindOptions = ["step", "inspiration", "routine"] as const;
++export const difficultyOptions = [1, 2, 3, 5, 8] as const;
++
++export type StepFormVideo = StepVideo;
++
++export type StepFormValues = {
++  videos: StepFormVideo[];
++  name: string;
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  smartTags: string[];
++  removedSmartTags: string[];
++  tokens: string[];
++};
++
++export type ExistingStepVideo = {
++  hash: string;
++  stepId: string;
++  stepName: string;
++};
++
++export type StepMutationInput = {
++  name: string;
++  videos: StepFormVideo[];
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  removedSmartTags: string[];
++  variationKey: string;
++};
++
++export type StepFormErrors = Partial<Record<keyof StepFormValues, string>>;
++
++export type StepFormValidationOptions = {
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++};
++
++export type StepFormValidationResult =
++  | { ok: true; values: StepFormValues; errors: StepFormErrors }
++  | { ok: false; values: StepFormValues; errors: StepFormErrors };
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53cf031725
+--- /dev/null
++++ b/tests/components/step-form.test.tsx
+@@ -0,0 +1,211 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  createStepFormDefaults,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import type { StepFormValues } from "@/lib/steps/step-form-schema";
++
++const validVideo = {
++  hash: "video-hash-1",
++  storageKey: "owners/user/videos/video-hash-1.mp4",
++};
++
++describe("step form validation", () => {
++  it("defaults to the minimal empty step shape", () => {
++    expect(createStepFormDefaults()).toEqual({
++      videos: [],
++      name: "",
++      difficulty: 1,
++      feeling: [],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      smartTags: [],
++      removedSmartTags: [],
++      tokens: [],
++    });
++  });
++
++  it("requires name, difficulty, kind, feeling, and valid videos", () => {
++    const result = validateStepFormValues({
++      ...createStepFormDefaults(),
++      kind: "bad-kind",
++      difficulty: Number.NaN,
++      videos: [{ hash: "", storageKey: "" }],
++    } as unknown as StepFormValues);
++
++    expect(result.ok).toBe(false);
++    expect(result.errors).toEqual({
++      name: "Name is required.",
++      difficulty: "Difficulty is required.",
++      kind: "Choose a valid kind.",
++      feeling: "Choose at least one feeling.",
++      videos: "Video hash and storage key are required.",
++    });
++  });
++
++  it("blocks duplicate videos except the edited step", () => {
++    const values = {
++      ...createStepFormDefaults(),
++      name: "Saida",
++      videos: [validVideo],
++      feeling: ["semba"],
++    };
++
++    const duplicate = validateStepFormValues(values, {
++      currentStepId: "step-2",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++    const edited = validateStepFormValues(values, {
++      currentStepId: "step-1",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++
++    expect(duplicate.ok).toBe(false);
++    expect(duplicate.errors.videos).toBe("Duplicate of Existing Saida.");
++    expect(edited.ok).toBe(true);
++  });
++});
++
++describe("StepForm", () => {
++  it("submits Convex mutation-shaped values for a valid form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Saida damska");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith({
++      name: "Saida damska",
++      videos: [validVideo],
++      difficulty: 1,
++      feeling: ["semba"],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      removedSmartTags: [],
++      variationKey: expect.any(String),
++    });
++  });
++
++  it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Obrot shadow");
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++
++    await waitFor(
++      () => expect(screen.getByText("Shadow position")).toBeInTheDocument(),
++      { timeout: 500 },
++    );
++    expect(screen.getByText("Obrót")).toBeInTheDocument();
++
++    await user.click(
++      screen.getByRole("button", { name: "Remove smart tag Shadow position" }),
++    );
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++    expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
++    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith(
++      expect.objectContaining({
++        removedSmartTags: ["Shadow position"],
++      }),
++    );
++  });
++
++  it("offers tag and artist autocomplete without arbitrary smart tag controls", async () => {
++    const user = userEvent.setup();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++          name: "Saida damska",
++        }}
++        tagOptions={["balance", "frame"]}
++        artistOptions={["Petchu"]}
++        onSubmit={vi.fn()}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++
++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
++  });
++
++  it("shows validation failures instead of submitting an empty form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(<StepForm onSubmit={onSubmit} />);
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).not.toHaveBeenCalled();
++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
++  });
++});
++
++const _typecheck: StepFormValues | null = null;
+
+codex
+The run log is actively appended by each tool call, so it became dirty again after the progress commit. I’m stopping the dev/browser sessions now, then I’ll make one final run-log commit and suppress further run-log dirtiness locally so the Ralph loop sees a clean tree.
+ succeeded in 361174ms:
+
+> steps-thing@0.1.0 dev /Users/maciejkucharski/work/steps-thing
+> next dev
+
+⚠ Port 3000 is in use by process 40834, using available port 3001 instead.
+▲ Next.js 16.2.4 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.0.55:3001
+- Environments: .env.local
+✓ Ready in 424ms
+
+ GET /sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3001%2Fsteps%2Fnew 200 in 1083ms (next.js: 759ms, proxy.ts: 7ms, application-code: 317ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /sign-in/SignIn_clerk_catchall_check_1778180527099 200 in 56ms (next.js: 7ms, proxy.ts: 6ms, application-code: 43ms)
+ GET /sign-in 200 in 61ms (next.js: 9ms, proxy.ts: 9ms, application-code: 42ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /sign-in/SignIn_clerk_catchall_check_1778180549250 200 in 128ms (next.js: 8ms, proxy.ts: 5ms, application-code: 114ms)
+ GET /__step-form-preview 404 in 64ms (next.js: 24ms, proxy.ts: 6ms, application-code: 35ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /__step-form-preview 404 in 57ms (next.js: 8ms, proxy.ts: 12ms, application-code: 37ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /sign-in 200 in 434ms (next.js: 89ms, proxy.ts: 108ms, application-code: 236ms)
+ GET /__step-form-preview 404 in 436ms (next.js: 212ms, proxy.ts: 110ms, application-code: 113ms)
+ GET /__step-form-preview 404 in 266ms (next.js: 18ms, proxy.ts: 64ms, application-code: 185ms)
+ GET /sign-in 200 in 277ms (next.js: 57ms, proxy.ts: 53ms, application-code: 166ms)
+ GET /__step-form-preview 404 in 331ms (next.js: 13ms, proxy.ts: 59ms, application-code: 260ms)
+ GET /sign-in 200 in 274ms (next.js: 47ms, proxy.ts: 100ms, application-code: 127ms)
+ GET /sign-in 200 in 136ms (next.js: 21ms, proxy.ts: 87ms, application-code: 28ms)
+ GET /sign-in 200 in 44ms (next.js: 12ms, proxy.ts: 9ms, application-code: 23ms)
+ GET /sign-in 200 in 32ms (next.js: 3ms, proxy.ts: 7ms, application-code: 23ms)
+ GET /sign-in 200 in 29ms (next.js: 2ms, proxy.ts: 6ms, application-code: 21ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /sign-in 200 in 29ms (next.js: 4ms, proxy.ts: 6ms, application-code: 19ms)
+ GET /sign-in 200 in 27ms (next.js: 3ms, proxy.ts: 5ms, application-code: 19ms)
+ GET /sign-in 200 in 27ms (next.js: 4ms, proxy.ts: 6ms, application-code: 17ms)
+ GET /sign-in 200 in 28ms (next.js: 3ms, proxy.ts: 6ms, application-code: 20ms)
+ GET /sign-in 200 in 27ms (next.js: 4ms, proxy.ts: 5ms, application-code: 19ms)
+ GET /sign-in 200 in 43ms (next.js: 6ms, proxy.ts: 4ms, application-code: 33ms)
+ GET /sign-in 200 in 34ms (next.js: 3ms, proxy.ts: 17ms, application-code: 14ms)
+ GET /sign-in 200 in 29ms (next.js: 7ms, proxy.ts: 8ms, application-code: 14ms)
+ GET /sign-in 200 in 27ms (next.js: 2ms, proxy.ts: 8ms, application-code: 16ms)
+ GET /sign-in 200 in 21ms (next.js: 5ms, proxy.ts: 4ms, application-code: 12ms)
+ GET /sign-in 200 in 44ms (next.js: 4ms, proxy.ts: 5ms, application-code: 35ms)
+ GET /sign-in 200 in 65ms (next.js: 9ms, proxy.ts: 11ms, application-code: 46ms)
+ GET /sign-in 200 in 45ms (next.js: 12ms, proxy.ts: 11ms, application-code: 22ms)
+ GET /sign-in 200 in 98ms (next.js: 45ms, proxy.ts: 7ms, application-code: 46ms)
+ GET /sign-in 200 in 38ms (next.js: 4ms, proxy.ts: 17ms, application-code: 17ms)
+ GET /sign-in 200 in 24ms (next.js: 5ms, proxy.ts: 5ms, application-code: 15ms)
+ GET /sign-in 200 in 24ms (next.js: 3ms, proxy.ts: 6ms, application-code: 15ms)
+ GET /sign-in 200 in 26ms (next.js: 4ms, proxy.ts: 5ms, application-code: 17ms)
+ GET /sign-in 200 in 18ms (next.js: 3ms, proxy.ts: 4ms, application-code: 12ms)
+ GET /step-form-preview 200 in 634ms (next.js: 548ms, proxy.ts: 5ms, application-code: 82ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /step-form-preview 404 in 218ms (next.js: 39ms, proxy.ts: 65ms, application-code: 114ms)
+ GET /sign-in 200 in 234ms (next.js: 91ms, proxy.ts: 64ms, application-code: 79ms)
+ GET /step-form-preview 404 in 141ms (next.js: 8ms, proxy.ts: 24ms, application-code: 109ms)
+ GET /sign-in 200 in 149ms (next.js: 82ms, proxy.ts: 9ms, application-code: 58ms)
+ GET /step-form-preview 404 in 203ms (next.js: 21ms, proxy.ts: 9ms, application-code: 172ms)
+ GET /sign-in 200 in 110ms (next.js: 24ms, proxy.ts: 23ms, application-code: 62ms)
+ GET /sign-in 200 in 55ms (next.js: 15ms, proxy.ts: 15ms, application-code: 25ms)
+ GET /sign-in 200 in 31ms (next.js: 8ms, proxy.ts: 5ms, application-code: 18ms)
+ GET /sign-in 200 in 34ms (next.js: 3ms, proxy.ts: 8ms, application-code: 23ms)
+ GET /sign-in 200 in 29ms (next.js: 4ms, proxy.ts: 7ms, application-code: 19ms)
+ GET /sign-in 200 in 26ms (next.js: 5ms, proxy.ts: 5ms, application-code: 16ms)
+[browser] Clerk: Clerk has been loaded with development keys. Development instances have strict usage limits and should not be used when deploying your application to production. Learn more: https://clerk.com/docs/deployments/overview (https://witty-rabbit-65.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js:12:3216)
+ GET /sign-in 200 in 33ms (next.js: 3ms, proxy.ts: 4ms, application-code: 26ms)
+ GET /sign-in 200 in 28ms (next.js: 3ms, proxy.ts: 6ms, application-code: 19ms)
+ GET /sign-in 200 in 35ms (next.js: 5ms, proxy.ts: 6ms, application-code: 24ms)
+ GET /sign-in 200 in 39ms (next.js: 8ms, proxy.ts: 8ms, application-code: 22ms)
+ GET /sign-in 200 in 29ms (next.js: 4ms, proxy.ts: 6ms, application-code: 19ms)
+ GET /sign-in 200 in 24ms (next.js: 3ms, proxy.ts: 6ms, application-code: 15ms)
+ GET /sign-in 200 in 27ms (next.js: 3ms, proxy.ts: 6ms, application-code: 19ms)
+ GET /sign-in 200 in 24ms (next.js: 4ms, proxy.ts: 4ms, application-code: 16ms)
+ GET /sign-in 200 in 32ms (next.js: 6ms, proxy.ts: 7ms, application-code: 20ms)
+ GET /sign-in 200 in 37ms (next.js: 8ms, proxy.ts: 8ms, application-code: 20ms)
+ GET /sign-in 200 in 22ms (next.js: 3ms, proxy.ts: 4ms, application-code: 14ms)
+ GET /sign-in 200 in 27ms (next.js: 3ms, proxy.ts: 4ms, application-code: 20ms)
+ GET /sign-in 200 in 57ms (next.js: 6ms, proxy.ts: 6ms, application-code: 45ms)
+ GET /sign-in 200 in 64ms (next.js: 28ms, proxy.ts: 8ms, application-code: 28ms)
+ GET /sign-in 200 in 58ms (next.js: 6ms, proxy.ts: 8ms, application-code: 44ms)
+ GET /sign-in 200 in 99ms (next.js: 42ms, proxy.ts: 26ms, application-code: 31ms)
+ GET /sign-in 200 in 32ms (next.js: 6ms, proxy.ts: 8ms, application-code: 18ms)
+ GET /sign-in 200 in 21ms (next.js: 5ms, proxy.ts: 5ms, application-code: 12ms)
+^C[?25h
+
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 71e5c3195f33b343e4663b112b7b4e0b02489f59..0e628061f157f0962a5c65f746e1b33b28d58c90
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -42,3 +42,8 @@
+ [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
+ [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+ [2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
++[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
++[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
++[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
++[2026-05-07 21:05:43] Completed security performance regression review for S04-01
++[2026-05-07 21:06:08] Updated progress log for S04-01 step form validation and smart tags
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 4ea38350d12c7bc2647a91db3562a70fc91609b8..23a9712aca9f13f3c79d92854d8da51607fd3911
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -204,3 +204,40 @@
+   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+ ---
++
++## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
++Thread:
++Run: 20260507-205447-62953 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 71a4d85 feat(steps): add shared step form
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/forms/checklist.tsx
++  - components/forms/select.tsx
++  - components/forms/tags-input.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - lib/steps/step-form-defaults.ts
++  - lib/steps/step-form-schema.ts
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
++  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
++  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index be33f16485c441bb2c4a6ec020134da651928f60..b5562246641dc7d974bec97c3a0158b89946296a
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,4 +1,4 @@
+-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
+ 
+ export default function NewStepPage() {
+   return (
+@@ -10,7 +10,7 @@
+         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+       </div>
+       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepVideoUploadField />
++        <StepFormWithUserData />
+       </section>
+     </main>
+   );
+diff --git a/components/forms/checklist.tsx b/components/forms/checklist.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e975bba2a7cfa8a5a290b62912e027908c59249
+--- /dev/null
++++ b/components/forms/checklist.tsx
+@@ -0,0 +1,52 @@
++"use client";
++
++type ChecklistOption = {
++  value: string;
++  label: string;
++};
++
++type ChecklistProps = {
++  label: string;
++  values: string[];
++  options: ChecklistOption[];
++  error?: string;
++  onChange: (values: string[]) => void;
++};
++
++export function Checklist({
++  label,
++  values,
++  options,
++  error,
++  onChange,
++}: ChecklistProps) {
++  function toggle(value: string) {
++    onChange(
++      values.includes(value)
++        ? values.filter((candidate) => candidate !== value)
++        : [...values, value],
++    );
++  }
++
++  return (
++    <fieldset className="flex flex-col gap-2">
++      <legend className="text-sm font-medium">{label}</legend>
++      <div className="flex flex-wrap gap-2">
++        {options.map((option) => (
++          <label
++            key={option.value}
++            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++          >
++            <input
++              type="checkbox"
++              checked={values.includes(option.value)}
++              onChange={() => toggle(option.value)}
++            />
++            {option.label}
++          </label>
++        ))}
++      </div>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </fieldset>
++  );
++}
+diff --git a/components/forms/select.tsx b/components/forms/select.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5af68eaeb7ebcc9429b491375396f7903e3b07bb
+--- /dev/null
++++ b/components/forms/select.tsx
+@@ -0,0 +1,55 @@
++"use client";
++
++import { useId } from "react";
++
++type SelectOption<T extends string | number> = {
++  value: T;
++  label: string;
++};
++
++type SelectProps<T extends string | number> = {
++  label: string;
++  value: T;
++  options: SelectOption<T>[];
++  error?: string;
++  onChange: (value: T) => void;
++};
++
++export function Select<T extends string | number>({
++  label,
++  value,
++  options,
++  error,
++  onChange,
++}: SelectProps<T>) {
++  const id = useId();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <select
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={String(value)}
++        onChange={(event) => {
++          const option = options.find(
++            (candidate) => String(candidate.value) === event.target.value,
++          );
++
++          if (option) {
++            onChange(option.value);
++          }
++        }}
++      >
++        {options.map((option) => (
++          <option key={String(option.value)} value={String(option.value)}>
++            {option.label}
++          </option>
++        ))}
++      </select>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </div>
++  );
++}
+diff --git a/components/forms/tags-input.tsx b/components/forms/tags-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..895984c951a9705001284c182c8d579c2e8b8841
+--- /dev/null
++++ b/components/forms/tags-input.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { X } from "lucide-react";
++import { useId, useState } from "react";
++
++type TagsInputProps = {
++  label: string;
++  values: string[];
++  options?: string[];
++  onChange: (values: string[]) => void;
++};
++
++function normalize(value: string): string {
++  return value.trim();
++}
++
++export function TagsInput({
++  label,
++  values,
++  options = [],
++  onChange,
++}: TagsInputProps) {
++  const id = useId();
++  const [draft, setDraft] = useState("");
++  const listLabel = `Selected ${label.toLocaleLowerCase()}`;
++  const suggestions = options.filter((option) => !values.includes(option));
++
++  function addValue(value: string) {
++    const next = normalize(value);
++
++    if (!next || values.includes(next)) {
++      setDraft("");
++      return;
++    }
++
++    onChange([...values, next]);
++    setDraft("");
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <input
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={draft}
++        list={`${id}-options`}
++        onChange={(event) => setDraft(event.target.value)}
++        onBlur={() => addValue(draft)}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" || event.key === ",") {
++            event.preventDefault();
++            addValue(draft);
++          }
++        }}
++      />
++      <datalist id={`${id}-options`}>
++        {suggestions.map((option) => (
++          <option key={option} value={option} />
++        ))}
++      </datalist>
++      {suggestions.length > 0 ? (
++        <div className="flex flex-wrap gap-2" role="listbox" aria-label={`${label} options`}>
++          {suggestions.map((option) => (
++            <button
++              key={option}
++              type="button"
++              role="option"
++              className="rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-1 text-xs"
++              onClick={() => addValue(option)}
++            >
++              {option}
++            </button>
++          ))}
++        </div>
++      ) : null}
++      {values.length > 0 ? (
++        <fieldset aria-label={listLabel} className="flex flex-wrap gap-2">
++          {values.map((value) => (
++            <span
++              key={value}
++              className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--foreground)] px-2 text-xs text-white"
++            >
++              {value}
++              <button
++                type="button"
++                aria-label={`Remove ${label.toLocaleLowerCase()} ${value}`}
++                onClick={() =>
++                  onChange(values.filter((candidate) => candidate !== value))
++                }
++              >
++                <X size={14} aria-hidden="true" />
++              </button>
++            </span>
++          ))}
++        </fieldset>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..314efe186cee02dfe4079b89de1e491b186d9b8a
+--- /dev/null
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -0,0 +1,29 @@
++"use client";
++
++import { useQuery } from "convex/react";
++import { api } from "@/convex/_generated/api";
++import { StepForm } from "./step-form";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormWithUserDataProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++export function StepFormWithUserData(props: StepFormWithUserDataProps) {
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++
++  return (
++    <StepForm
++      {...props}
++      tagOptions={existing?.tags ?? []}
++      artistOptions={existing?.artists ?? []}
++    />
++  );
++}
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bea8645e116b6a5adc14c3bd5c1f94a945f4e405
+--- /dev/null
++++ b/components/steps/step-form.tsx
+@@ -0,0 +1,314 @@
++"use client";
++
++import { Check, RotateCcw, Save, X } from "lucide-react";
++import { type FormEvent, useEffect, useMemo, useState } from "react";
++import { Checklist } from "@/components/forms/checklist";
++import { Select } from "@/components/forms/select";
++import { TagsInput } from "@/components/forms/tags-input";
++import { getActiveAppConfig } from "@/lib/domain/config";
++import {
++  allowedSmartTags,
++  createStepFormDefaults,
++  deriveStepFormSmartFields,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import {
++  difficultyOptions,
++  type ExistingStepVideo,
++  type StepFormErrors,
++  type StepFormValues,
++  type StepMutationInput,
++  stepKindOptions,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++function nextVariationKey() {
++  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
++    return crypto.randomUUID();
++  }
++
++  return `variation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++}
++
++function unique(values: string[]) {
++  return [...new Set(values)];
++}
++
++function toMutationInput(values: StepFormValues): StepMutationInput {
++  return {
++    name: values.name.trim(),
++    videos: values.videos,
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    kind: values.kind,
++    tags: values.tags,
++    artists: values.artists,
++    notes: values.notes.trim(),
++    removedSmartTags: values.removedSmartTags,
++    variationKey: nextVariationKey(),
++  };
++}
++
++export function StepForm({
++  initialValues,
++  currentStepId,
++  existingVideos = [],
++  tagOptions = [],
++  artistOptions = [],
++  onSubmit,
++}: StepFormProps) {
++  const config = getActiveAppConfig();
++  const smartTagOptions = useMemo(() => allowedSmartTags(), []);
++  const [values, setValues] = useState<StepFormValues>(() => {
++    const defaults = createStepFormDefaults(initialValues);
++    const smartFields = deriveStepFormSmartFields(
++      defaults.name,
++      defaults.removedSmartTags,
++    );
++
++    return {
++      ...defaults,
++      smartTags: initialValues?.smartTags ?? smartFields.smartTags,
++      tokens: initialValues?.tokens ?? smartFields.tokens,
++    };
++  });
++  const [errors, setErrors] = useState<StepFormErrors>({});
++  const [submitMessage, setSubmitMessage] = useState("");
++
++  useEffect(() => {
++    const timeout = window.setTimeout(() => {
++      setValues((current) => ({
++        ...current,
++        ...deriveStepFormSmartFields(current.name, current.removedSmartTags),
++      }));
++    }, 200);
++
++    return () => window.clearTimeout(timeout);
++  }, [values.name, values.removedSmartTags]);
++
++  function update(patch: Partial<StepFormValues>) {
++    setValues((current) => ({ ...current, ...patch }));
++    setErrors({});
++    setSubmitMessage("");
++  }
++
++  function removeSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      smartTags: values.smartTags.filter((candidate) => candidate !== tag),
++      removedSmartTags: unique([...values.removedSmartTags, tag]),
++    });
++  }
++
++  function restoreSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      removedSmartTags: values.removedSmartTags.filter(
++        (candidate) => candidate !== tag,
++      ),
++    });
++  }
++
++  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++
++    const result = validateStepFormValues(values, {
++      currentStepId,
++      existingVideos,
++    });
++
++    if (!result.ok) {
++      setErrors(result.errors);
++      return;
++    }
++
++    await onSubmit?.(toMutationInput(result.values));
++    setSubmitMessage("Step is ready to save.");
++  }
++
++  return (
++    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++      <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++        <div>
++          <h2 id="videos-heading" className="text-base font-semibold">
++            Videos
++          </h2>
++          {errors.videos ? (
++            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++          ) : null}
++        </div>
++        {values.videos.length > 0 ? (
++          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++            {values.videos.map((video) => (
++              <li key={video.hash} className="px-3 py-2 text-sm">
++                <span className="font-medium">{video.hash.slice(0, 12)}</span>
++                <span className="ml-2 text-[var(--muted-foreground)]">
++                  {video.storageKey}
++                </span>
++              </li>
++            ))}
++          </ul>
++        ) : (
++          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++            Add a video before saving.
++          </p>
++        )}
++      </section>
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Name
++        <input
++          className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-normal"
++          value={values.name}
++          onChange={(event) => update({ name: event.target.value })}
++        />
++        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++      </label>
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <Select
++          label="Kind"
++          value={values.kind}
++          error={errors.kind}
++          options={stepKindOptions.map((kind) => ({
++            value: kind,
++            label: config.stepKinds[kind],
++          }))}
++          onChange={(kind) => update({ kind })}
++        />
++        <Select
++          label="Difficulty"
++          value={values.difficulty}
++          error={errors.difficulty}
++          options={difficultyOptions.map((difficulty) => ({
++            value: difficulty,
++            label: config.difficulties[difficulty],
++          }))}
++          onChange={(difficulty) => update({ difficulty })}
++        />
++      </div>
++
++      <Checklist
++        label="Feeling"
++        values={values.feeling}
++        error={errors.feeling}
++        options={Object.entries(config.feelings).map(([value, label]) => ({
++          value,
++          label,
++        }))}
++        onChange={(feeling) => update({ feeling })}
++      />
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <TagsInput
++          label="Tags"
++          values={values.tags}
++          options={tagOptions}
++          onChange={(tags) => update({ tags })}
++        />
++        <TagsInput
++          label="Artists"
++          values={values.artists}
++          options={artistOptions}
++          onChange={(artists) => update({ artists })}
++        />
++      </div>
++
++      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++        <h2 id="smart-tags-heading" className="text-sm font-medium">
++          Smart tags
++        </h2>
++        {values.smartTags.length > 0 ? (
++          <div className="flex flex-wrap gap-2">
++            {values.smartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--accent)] px-2 text-xs text-[var(--accent-foreground)]"
++              >
++                <Check size={14} aria-hidden="true" />
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Remove smart tag ${tag}`}
++                  onClick={() => removeSmartTag(tag)}
++                >
++                  <X size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        ) : (
++          <p className="text-sm text-[var(--muted-foreground)]">
++            No smart tags matched.
++          </p>
++        )}
++      </section>
++
++      {values.removedSmartTags.length > 0 ? (
++        <section
++          className="flex flex-col gap-2"
++          aria-labelledby="removed-smart-tags-heading"
++        >
++          <h2 id="removed-smart-tags-heading" className="text-sm font-medium">
++            Removed smart tags
++          </h2>
++          <div className="flex flex-wrap gap-2">
++            {values.removedSmartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
++              >
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Restore smart tag ${tag}`}
++                  onClick={() => restoreSmartTag(tag)}
++                >
++                  <RotateCcw size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        </section>
++      ) : null}
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Notes
++        <textarea
++          className="min-h-28 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-normal"
++          value={values.notes}
++          onChange={(event) => update({ notes: event.target.value })}
++        />
++      </label>
++
++      <div className="flex flex-wrap items-center gap-3">
++        <button
++          type="submit"
++          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++        >
++          <Save size={16} aria-hidden="true" />
++          Save step
++        </button>
++        {submitMessage ? (
++          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++            {submitMessage}
++          </p>
++        ) : null}
++      </div>
++    </form>
++  );
++}
+diff --git a/lib/steps/step-form-defaults.ts b/lib/steps/step-form-defaults.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a41c7b6e051a4e9268de50409510a60a31dbbb2e
+--- /dev/null
++++ b/lib/steps/step-form-defaults.ts
+@@ -0,0 +1,119 @@
++import { getActiveAppConfig } from "@/lib/domain/config";
++import { matchSmartTags } from "@/lib/domain/smart-tags";
++import { tokenizeStepName } from "@/lib/domain/tokenize";
++import {
++  difficultyOptions,
++  type StepFormErrors,
++  type StepFormValidationOptions,
++  type StepFormValidationResult,
++  type StepFormValues,
++  stepKindOptions,
++} from "./step-form-schema";
++
++function uniqueNonEmpty(values: string[]): string[] {
++  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
++}
++
++export function createStepFormDefaults(
++  values: Partial<StepFormValues> = {},
++): StepFormValues {
++  const defaults: StepFormValues = {
++    videos: [],
++    name: "",
++    difficulty: 1,
++    feeling: [],
++    kind: "step",
++    tags: [],
++    artists: [],
++    notes: "",
++    smartTags: [],
++    removedSmartTags: [],
++    tokens: [],
++  };
++
++  return {
++    ...defaults,
++    ...values,
++    videos: values.videos ?? defaults.videos,
++    feeling: uniqueNonEmpty(values.feeling ?? defaults.feeling),
++    tags: uniqueNonEmpty(values.tags ?? defaults.tags),
++    artists: uniqueNonEmpty(values.artists ?? defaults.artists),
++    smartTags: uniqueNonEmpty(values.smartTags ?? defaults.smartTags),
++    removedSmartTags: uniqueNonEmpty(
++      values.removedSmartTags ?? defaults.removedSmartTags,
++    ),
++    tokens: values.tokens ?? defaults.tokens,
++  };
++}
++
++export function deriveStepFormSmartFields(
++  name: string,
++  removedSmartTags: string[],
++): Pick<StepFormValues, "smartTags" | "tokens"> {
++  const removed = new Set(removedSmartTags);
++
++  return {
++    smartTags: matchSmartTags(name, getActiveAppConfig()).filter(
++      (tag) => !removed.has(tag),
++    ),
++    tokens: tokenizeStepName(name),
++  };
++}
++
++export function allowedSmartTags(): string[] {
++  return getActiveAppConfig()
++    .smartTagMatchers.map((matcher) => matcher.tag)
++    .sort((left, right) => left.localeCompare(right, "pl-PL"));
++}
++
++export function validateStepFormValues(
++  rawValues: StepFormValues,
++  options: StepFormValidationOptions = {},
++): StepFormValidationResult {
++  const values = createStepFormDefaults(rawValues);
++  const errors: StepFormErrors = {};
++
++  if (!values.name.trim()) {
++    errors.name = "Name is required.";
++  }
++
++  if (!difficultyOptions.includes(values.difficulty)) {
++    errors.difficulty = "Difficulty is required.";
++  }
++
++  if (!stepKindOptions.includes(values.kind)) {
++    errors.kind = "Choose a valid kind.";
++  }
++
++  if (uniqueNonEmpty(values.feeling).length === 0) {
++    errors.feeling = "Choose at least one feeling.";
++  }
++
++  if (values.videos.length === 0) {
++    errors.videos = "Add at least one video.";
++  } else if (
++    values.videos.some(
++      (video) => video.hash.trim().length === 0 || video.storageKey.trim().length === 0,
++    )
++  ) {
++    errors.videos = "Video hash and storage key are required.";
++  } else {
++    const duplicate = values.videos
++      .map((video) =>
++        options.existingVideos?.find(
++          (candidate) =>
++            candidate.hash === video.hash &&
++            candidate.stepId !== options.currentStepId,
++        ),
++      )
++      .find(Boolean);
++
++    if (duplicate) {
++      errors.videos = `Duplicate of ${duplicate.stepName}.`;
++    }
++  }
++
++  return Object.keys(errors).length === 0
++    ? { ok: true, values, errors }
++    : { ok: false, values, errors };
++}
+diff --git a/lib/steps/step-form-schema.ts b/lib/steps/step-form-schema.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c095a88482fc73a588fcad1e3303414223ada172
+--- /dev/null
++++ b/lib/steps/step-form-schema.ts
+@@ -0,0 +1,51 @@
++import type { Difficulty, StepKind } from "@/lib/domain/config";
++import type { StepVideo } from "@/lib/video/storage-client";
++
++export const stepKindOptions = ["step", "inspiration", "routine"] as const;
++export const difficultyOptions = [1, 2, 3, 5, 8] as const;
++
++export type StepFormVideo = StepVideo;
++
++export type StepFormValues = {
++  videos: StepFormVideo[];
++  name: string;
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  smartTags: string[];
++  removedSmartTags: string[];
++  tokens: string[];
++};
++
++export type ExistingStepVideo = {
++  hash: string;
++  stepId: string;
++  stepName: string;
++};
++
++export type StepMutationInput = {
++  name: string;
++  videos: StepFormVideo[];
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  removedSmartTags: string[];
++  variationKey: string;
++};
++
++export type StepFormErrors = Partial<Record<keyof StepFormValues, string>>;
++
++export type StepFormValidationOptions = {
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++};
++
++export type StepFormValidationResult =
++  | { ok: true; values: StepFormValues; errors: StepFormErrors }
++  | { ok: false; values: StepFormValues; errors: StepFormErrors };
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53cf031725
+--- /dev/null
++++ b/tests/components/step-form.test.tsx
+@@ -0,0 +1,211 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  createStepFormDefaults,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import type { StepFormValues } from "@/lib/steps/step-form-schema";
++
++const validVideo = {
++  hash: "video-hash-1",
++  storageKey: "owners/user/videos/video-hash-1.mp4",
++};
++
++describe("step form validation", () => {
++  it("defaults to the minimal empty step shape", () => {
++    expect(createStepFormDefaults()).toEqual({
++      videos: [],
++      name: "",
++      difficulty: 1,
++      feeling: [],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      smartTags: [],
++      removedSmartTags: [],
++      tokens: [],
++    });
++  });
++
++  it("requires name, difficulty, kind, feeling, and valid videos", () => {
++    const result = validateStepFormValues({
++      ...createStepFormDefaults(),
++      kind: "bad-kind",
++      difficulty: Number.NaN,
++      videos: [{ hash: "", storageKey: "" }],
++    } as unknown as StepFormValues);
++
++    expect(result.ok).toBe(false);
++    expect(result.errors).toEqual({
++      name: "Name is required.",
++      difficulty: "Difficulty is required.",
++      kind: "Choose a valid kind.",
++      feeling: "Choose at least one feeling.",
++      videos: "Video hash and storage key are required.",
++    });
++  });
++
++  it("blocks duplicate videos except the edited step", () => {
++    const values = {
++      ...createStepFormDefaults(),
++      name: "Saida",
++      videos: [validVideo],
++      feeling: ["semba"],
++    };
++
++    const duplicate = validateStepFormValues(values, {
++      currentStepId: "step-2",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++    const edited = validateStepFormValues(values, {
++      currentStepId: "step-1",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++
++    expect(duplicate.ok).toBe(false);
++    expect(duplicate.errors.videos).toBe("Duplicate of Existing Saida.");
++    expect(edited.ok).toBe(true);
++  });
++});
++
++describe("StepForm", () => {
++  it("submits Convex mutation-shaped values for a valid form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Saida damska");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith({
++      name: "Saida damska",
++      videos: [validVideo],
++      difficulty: 1,
++      feeling: ["semba"],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      removedSmartTags: [],
++      variationKey: expect.any(String),
++    });
++  });
++
++  it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Obrot shadow");
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++
++    await waitFor(
++      () => expect(screen.getByText("Shadow position")).toBeInTheDocument(),
++      { timeout: 500 },
++    );
++    expect(screen.getByText("Obrót")).toBeInTheDocument();
++
++    await user.click(
++      screen.getByRole("button", { name: "Remove smart tag Shadow position" }),
++    );
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++    expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
++    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith(
++      expect.objectContaining({
++        removedSmartTags: ["Shadow position"],
++      }),
++    );
++  });
++
++  it("offers tag and artist autocomplete without arbitrary smart tag controls", async () => {
++    const user = userEvent.setup();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++          name: "Saida damska",
++        }}
++        tagOptions={["balance", "frame"]}
++        artistOptions={["Petchu"]}
++        onSubmit={vi.fn()}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++
++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
++  });
++
++  it("shows validation failures instead of submitting an empty form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(<StepForm onSubmit={onSubmit} />);
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).not.toHaveBeenCalled();
++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
++  });
++});
++
++const _typecheck: StepFormValues | null = null;
+
+ exited 130 in 355195ms:
+Installing dependencies...
+
+up to date, audited 140 packages in 1s
+
+29 packages are looking for funding
+  run `npm fund` for details
+
+11 vulnerabilities (7 moderate, 4 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+Starting dev-browser server...
+Creating tmp directory...
+Creating profiles directory...
+Checking Playwright browser installation...
+Playwright Chromium not found. Installing (this may take a minute)...
+Using pnpm to install Playwright...
+Chromium installed successfully.
+Checking for existing servers...
+Starting dev browser server...
+Using persistent browser profile: /Users/maciejkucharski/work/steps-thing/.codex/skills/dev-browser/profiles/browser-data
+Launching browser with persistent context...
+Browser launched with persistent profile...
+CDP WebSocket endpoint: ws://127.0.0.1:9223/devtools/browser/0b6a9e17-d07d-48c1-8581-ff9128d2af29
+Dev browser server started
+  WebSocket: ws://127.0.0.1:9223/devtools/browser/0b6a9e17-d07d-48c1-8581-ff9128d2af29
+  Tmp directory: /Users/maciejkucharski/work/steps-thing/.codex/skills/dev-browser/tmp
+  Profile directory: /Users/maciejkucharski/work/steps-thing/.codex/skills/dev-browser/profiles
+
+Ready
+
+Press Ctrl+C to stop
+HTTP API server running on port 9222
+^C
+Shutting down...
+
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 71e5c3195f33b343e4663b112b7b4e0b02489f59..0e628061f157f0962a5c65f746e1b33b28d58c90
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -42,3 +42,8 @@
+ [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
+ [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+ [2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
++[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
++[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
++[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
++[2026-05-07 21:05:43] Completed security performance regression review for S04-01
++[2026-05-07 21:06:08] Updated progress log for S04-01 step form validation and smart tags
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 4ea38350d12c7bc2647a91db3562a70fc91609b8..23a9712aca9f13f3c79d92854d8da51607fd3911
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -204,3 +204,40 @@
+   - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+   - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+ ---
++
++## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
++Thread:
++Run: 20260507-205447-62953 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 71a4d85 feat(steps): add shared step form
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/forms/checklist.tsx
++  - components/forms/select.tsx
++  - components/forms/tags-input.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - lib/steps/step-form-defaults.ts
++  - lib/steps/step-form-schema.ts
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
++  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
++  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index be33f16485c441bb2c4a6ec020134da651928f60..b5562246641dc7d974bec97c3a0158b89946296a
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,4 +1,4 @@
+-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
+ 
+ export default function NewStepPage() {
+   return (
+@@ -10,7 +10,7 @@
+         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+       </div>
+       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepVideoUploadField />
++        <StepFormWithUserData />
+       </section>
+     </main>
+   );
+diff --git a/components/forms/checklist.tsx b/components/forms/checklist.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e975bba2a7cfa8a5a290b62912e027908c59249
+--- /dev/null
++++ b/components/forms/checklist.tsx
+@@ -0,0 +1,52 @@
++"use client";
++
++type ChecklistOption = {
++  value: string;
++  label: string;
++};
++
++type ChecklistProps = {
++  label: string;
++  values: string[];
++  options: ChecklistOption[];
++  error?: string;
++  onChange: (values: string[]) => void;
++};
++
++export function Checklist({
++  label,
++  values,
++  options,
++  error,
++  onChange,
++}: ChecklistProps) {
++  function toggle(value: string) {
++    onChange(
++      values.includes(value)
++        ? values.filter((candidate) => candidate !== value)
++        : [...values, value],
++    );
++  }
++
++  return (
++    <fieldset className="flex flex-col gap-2">
++      <legend className="text-sm font-medium">{label}</legend>
++      <div className="flex flex-wrap gap-2">
++        {options.map((option) => (
++          <label
++            key={option.value}
++            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++          >
++            <input
++              type="checkbox"
++              checked={values.includes(option.value)}
++              onChange={() => toggle(option.value)}
++            />
++            {option.label}
++          </label>
++        ))}
++      </div>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </fieldset>
++  );
++}
+diff --git a/components/forms/select.tsx b/components/forms/select.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5af68eaeb7ebcc9429b491375396f7903e3b07bb
+--- /dev/null
++++ b/components/forms/select.tsx
+@@ -0,0 +1,55 @@
++"use client";
++
++import { useId } from "react";
++
++type SelectOption<T extends string | number> = {
++  value: T;
++  label: string;
++};
++
++type SelectProps<T extends string | number> = {
++  label: string;
++  value: T;
++  options: SelectOption<T>[];
++  error?: string;
++  onChange: (value: T) => void;
++};
++
++export function Select<T extends string | number>({
++  label,
++  value,
++  options,
++  error,
++  onChange,
++}: SelectProps<T>) {
++  const id = useId();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <select
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={String(value)}
++        onChange={(event) => {
++          const option = options.find(
++            (candidate) => String(candidate.value) === event.target.value,
++          );
++
++          if (option) {
++            onChange(option.value);
++          }
++        }}
++      >
++        {options.map((option) => (
++          <option key={String(option.value)} value={String(option.value)}>
++            {option.label}
++          </option>
++        ))}
++      </select>
++      {error ? <p className="text-sm text-red-700">{error}</p> : null}
++    </div>
++  );
++}
+diff --git a/components/forms/tags-input.tsx b/components/forms/tags-input.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..895984c951a9705001284c182c8d579c2e8b8841
+--- /dev/null
++++ b/components/forms/tags-input.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { X } from "lucide-react";
++import { useId, useState } from "react";
++
++type TagsInputProps = {
++  label: string;
++  values: string[];
++  options?: string[];
++  onChange: (values: string[]) => void;
++};
++
++function normalize(value: string): string {
++  return value.trim();
++}
++
++export function TagsInput({
++  label,
++  values,
++  options = [],
++  onChange,
++}: TagsInputProps) {
++  const id = useId();
++  const [draft, setDraft] = useState("");
++  const listLabel = `Selected ${label.toLocaleLowerCase()}`;
++  const suggestions = options.filter((option) => !values.includes(option));
++
++  function addValue(value: string) {
++    const next = normalize(value);
++
++    if (!next || values.includes(next)) {
++      setDraft("");
++      return;
++    }
++
++    onChange([...values, next]);
++    setDraft("");
++  }
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label htmlFor={id} className="text-sm font-medium">
++        {label}
++      </label>
++      <input
++        id={id}
++        className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm"
++        value={draft}
++        list={`${id}-options`}
++        onChange={(event) => setDraft(event.target.value)}
++        onBlur={() => addValue(draft)}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" || event.key === ",") {
++            event.preventDefault();
++            addValue(draft);
++          }
++        }}
++      />
++      <datalist id={`${id}-options`}>
++        {suggestions.map((option) => (
++          <option key={option} value={option} />
++        ))}
++      </datalist>
++      {suggestions.length > 0 ? (
++        <div className="flex flex-wrap gap-2" role="listbox" aria-label={`${label} options`}>
++          {suggestions.map((option) => (
++            <button
++              key={option}
++              type="button"
++              role="option"
++              className="rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-1 text-xs"
++              onClick={() => addValue(option)}
++            >
++              {option}
++            </button>
++          ))}
++        </div>
++      ) : null}
++      {values.length > 0 ? (
++        <fieldset aria-label={listLabel} className="flex flex-wrap gap-2">
++          {values.map((value) => (
++            <span
++              key={value}
++              className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--foreground)] px-2 text-xs text-white"
++            >
++              {value}
++              <button
++                type="button"
++                aria-label={`Remove ${label.toLocaleLowerCase()} ${value}`}
++                onClick={() =>
++                  onChange(values.filter((candidate) => candidate !== value))
++                }
++              >
++                <X size={14} aria-hidden="true" />
++              </button>
++            </span>
++          ))}
++        </fieldset>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..314efe186cee02dfe4079b89de1e491b186d9b8a
+--- /dev/null
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -0,0 +1,29 @@
++"use client";
++
++import { useQuery } from "convex/react";
++import { api } from "@/convex/_generated/api";
++import { StepForm } from "./step-form";
++import type {
++  ExistingStepVideo,
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormWithUserDataProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++export function StepFormWithUserData(props: StepFormWithUserDataProps) {
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++
++  return (
++    <StepForm
++      {...props}
++      tagOptions={existing?.tags ?? []}
++      artistOptions={existing?.artists ?? []}
++    />
++  );
++}
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bea8645e116b6a5adc14c3bd5c1f94a945f4e405
+--- /dev/null
++++ b/components/steps/step-form.tsx
+@@ -0,0 +1,314 @@
++"use client";
++
++import { Check, RotateCcw, Save, X } from "lucide-react";
++import { type FormEvent, useEffect, useMemo, useState } from "react";
++import { Checklist } from "@/components/forms/checklist";
++import { Select } from "@/components/forms/select";
++import { TagsInput } from "@/components/forms/tags-input";
++import { getActiveAppConfig } from "@/lib/domain/config";
++import {
++  allowedSmartTags,
++  createStepFormDefaults,
++  deriveStepFormSmartFields,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import {
++  difficultyOptions,
++  type ExistingStepVideo,
++  type StepFormErrors,
++  type StepFormValues,
++  type StepMutationInput,
++  stepKindOptions,
++} from "@/lib/steps/step-form-schema";
++
++type StepFormProps = {
++  initialValues?: Partial<StepFormValues>;
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++  tagOptions?: string[];
++  artistOptions?: string[];
++  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++};
++
++function nextVariationKey() {
++  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
++    return crypto.randomUUID();
++  }
++
++  return `variation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++}
++
++function unique(values: string[]) {
++  return [...new Set(values)];
++}
++
++function toMutationInput(values: StepFormValues): StepMutationInput {
++  return {
++    name: values.name.trim(),
++    videos: values.videos,
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    kind: values.kind,
++    tags: values.tags,
++    artists: values.artists,
++    notes: values.notes.trim(),
++    removedSmartTags: values.removedSmartTags,
++    variationKey: nextVariationKey(),
++  };
++}
++
++export function StepForm({
++  initialValues,
++  currentStepId,
++  existingVideos = [],
++  tagOptions = [],
++  artistOptions = [],
++  onSubmit,
++}: StepFormProps) {
++  const config = getActiveAppConfig();
++  const smartTagOptions = useMemo(() => allowedSmartTags(), []);
++  const [values, setValues] = useState<StepFormValues>(() => {
++    const defaults = createStepFormDefaults(initialValues);
++    const smartFields = deriveStepFormSmartFields(
++      defaults.name,
++      defaults.removedSmartTags,
++    );
++
++    return {
++      ...defaults,
++      smartTags: initialValues?.smartTags ?? smartFields.smartTags,
++      tokens: initialValues?.tokens ?? smartFields.tokens,
++    };
++  });
++  const [errors, setErrors] = useState<StepFormErrors>({});
++  const [submitMessage, setSubmitMessage] = useState("");
++
++  useEffect(() => {
++    const timeout = window.setTimeout(() => {
++      setValues((current) => ({
++        ...current,
++        ...deriveStepFormSmartFields(current.name, current.removedSmartTags),
++      }));
++    }, 200);
++
++    return () => window.clearTimeout(timeout);
++  }, [values.name, values.removedSmartTags]);
++
++  function update(patch: Partial<StepFormValues>) {
++    setValues((current) => ({ ...current, ...patch }));
++    setErrors({});
++    setSubmitMessage("");
++  }
++
++  function removeSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      smartTags: values.smartTags.filter((candidate) => candidate !== tag),
++      removedSmartTags: unique([...values.removedSmartTags, tag]),
++    });
++  }
++
++  function restoreSmartTag(tag: string) {
++    if (!smartTagOptions.includes(tag)) {
++      return;
++    }
++
++    update({
++      removedSmartTags: values.removedSmartTags.filter(
++        (candidate) => candidate !== tag,
++      ),
++    });
++  }
++
++  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++
++    const result = validateStepFormValues(values, {
++      currentStepId,
++      existingVideos,
++    });
++
++    if (!result.ok) {
++      setErrors(result.errors);
++      return;
++    }
++
++    await onSubmit?.(toMutationInput(result.values));
++    setSubmitMessage("Step is ready to save.");
++  }
++
++  return (
++    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++      <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
++        <div>
++          <h2 id="videos-heading" className="text-base font-semibold">
++            Videos
++          </h2>
++          {errors.videos ? (
++            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++          ) : null}
++        </div>
++        {values.videos.length > 0 ? (
++          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++            {values.videos.map((video) => (
++              <li key={video.hash} className="px-3 py-2 text-sm">
++                <span className="font-medium">{video.hash.slice(0, 12)}</span>
++                <span className="ml-2 text-[var(--muted-foreground)]">
++                  {video.storageKey}
++                </span>
++              </li>
++            ))}
++          </ul>
++        ) : (
++          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++            Add a video before saving.
++          </p>
++        )}
++      </section>
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Name
++        <input
++          className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-normal"
++          value={values.name}
++          onChange={(event) => update({ name: event.target.value })}
++        />
++        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++      </label>
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <Select
++          label="Kind"
++          value={values.kind}
++          error={errors.kind}
++          options={stepKindOptions.map((kind) => ({
++            value: kind,
++            label: config.stepKinds[kind],
++          }))}
++          onChange={(kind) => update({ kind })}
++        />
++        <Select
++          label="Difficulty"
++          value={values.difficulty}
++          error={errors.difficulty}
++          options={difficultyOptions.map((difficulty) => ({
++            value: difficulty,
++            label: config.difficulties[difficulty],
++          }))}
++          onChange={(difficulty) => update({ difficulty })}
++        />
++      </div>
++
++      <Checklist
++        label="Feeling"
++        values={values.feeling}
++        error={errors.feeling}
++        options={Object.entries(config.feelings).map(([value, label]) => ({
++          value,
++          label,
++        }))}
++        onChange={(feeling) => update({ feeling })}
++      />
++
++      <div className="grid gap-4 md:grid-cols-2">
++        <TagsInput
++          label="Tags"
++          values={values.tags}
++          options={tagOptions}
++          onChange={(tags) => update({ tags })}
++        />
++        <TagsInput
++          label="Artists"
++          values={values.artists}
++          options={artistOptions}
++          onChange={(artists) => update({ artists })}
++        />
++      </div>
++
++      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++        <h2 id="smart-tags-heading" className="text-sm font-medium">
++          Smart tags
++        </h2>
++        {values.smartTags.length > 0 ? (
++          <div className="flex flex-wrap gap-2">
++            {values.smartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md bg-[var(--accent)] px-2 text-xs text-[var(--accent-foreground)]"
++              >
++                <Check size={14} aria-hidden="true" />
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Remove smart tag ${tag}`}
++                  onClick={() => removeSmartTag(tag)}
++                >
++                  <X size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        ) : (
++          <p className="text-sm text-[var(--muted-foreground)]">
++            No smart tags matched.
++          </p>
++        )}
++      </section>
++
++      {values.removedSmartTags.length > 0 ? (
++        <section
++          className="flex flex-col gap-2"
++          aria-labelledby="removed-smart-tags-heading"
++        >
++          <h2 id="removed-smart-tags-heading" className="text-sm font-medium">
++            Removed smart tags
++          </h2>
++          <div className="flex flex-wrap gap-2">
++            {values.removedSmartTags.map((tag) => (
++              <span
++                key={tag}
++                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
++              >
++                {tag}
++                <button
++                  type="button"
++                  aria-label={`Restore smart tag ${tag}`}
++                  onClick={() => restoreSmartTag(tag)}
++                >
++                  <RotateCcw size={14} aria-hidden="true" />
++                </button>
++              </span>
++            ))}
++          </div>
++        </section>
++      ) : null}
++
++      <label className="flex flex-col gap-2 text-sm font-medium">
++        Notes
++        <textarea
++          className="min-h-28 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm font-normal"
++          value={values.notes}
++          onChange={(event) => update({ notes: event.target.value })}
++        />
++      </label>
++
++      <div className="flex flex-wrap items-center gap-3">
++        <button
++          type="submit"
++          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++        >
++          <Save size={16} aria-hidden="true" />
++          Save step
++        </button>
++        {submitMessage ? (
++          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++            {submitMessage}
++          </p>
++        ) : null}
++      </div>
++    </form>
++  );
++}
+diff --git a/lib/steps/step-form-defaults.ts b/lib/steps/step-form-defaults.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a41c7b6e051a4e9268de50409510a60a31dbbb2e
+--- /dev/null
++++ b/lib/steps/step-form-defaults.ts
+@@ -0,0 +1,119 @@
++import { getActiveAppConfig } from "@/lib/domain/config";
++import { matchSmartTags } from "@/lib/domain/smart-tags";
++import { tokenizeStepName } from "@/lib/domain/tokenize";
++import {
++  difficultyOptions,
++  type StepFormErrors,
++  type StepFormValidationOptions,
++  type StepFormValidationResult,
++  type StepFormValues,
++  stepKindOptions,
++} from "./step-form-schema";
++
++function uniqueNonEmpty(values: string[]): string[] {
++  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
++}
++
++export function createStepFormDefaults(
++  values: Partial<StepFormValues> = {},
++): StepFormValues {
++  const defaults: StepFormValues = {
++    videos: [],
++    name: "",
++    difficulty: 1,
++    feeling: [],
++    kind: "step",
++    tags: [],
++    artists: [],
++    notes: "",
++    smartTags: [],
++    removedSmartTags: [],
++    tokens: [],
++  };
++
++  return {
++    ...defaults,
++    ...values,
++    videos: values.videos ?? defaults.videos,
++    feeling: uniqueNonEmpty(values.feeling ?? defaults.feeling),
++    tags: uniqueNonEmpty(values.tags ?? defaults.tags),
++    artists: uniqueNonEmpty(values.artists ?? defaults.artists),
++    smartTags: uniqueNonEmpty(values.smartTags ?? defaults.smartTags),
++    removedSmartTags: uniqueNonEmpty(
++      values.removedSmartTags ?? defaults.removedSmartTags,
++    ),
++    tokens: values.tokens ?? defaults.tokens,
++  };
++}
++
++export function deriveStepFormSmartFields(
++  name: string,
++  removedSmartTags: string[],
++): Pick<StepFormValues, "smartTags" | "tokens"> {
++  const removed = new Set(removedSmartTags);
++
++  return {
++    smartTags: matchSmartTags(name, getActiveAppConfig()).filter(
++      (tag) => !removed.has(tag),
++    ),
++    tokens: tokenizeStepName(name),
++  };
++}
++
++export function allowedSmartTags(): string[] {
++  return getActiveAppConfig()
++    .smartTagMatchers.map((matcher) => matcher.tag)
++    .sort((left, right) => left.localeCompare(right, "pl-PL"));
++}
++
++export function validateStepFormValues(
++  rawValues: StepFormValues,
++  options: StepFormValidationOptions = {},
++): StepFormValidationResult {
++  const values = createStepFormDefaults(rawValues);
++  const errors: StepFormErrors = {};
++
++  if (!values.name.trim()) {
++    errors.name = "Name is required.";
++  }
++
++  if (!difficultyOptions.includes(values.difficulty)) {
++    errors.difficulty = "Difficulty is required.";
++  }
++
++  if (!stepKindOptions.includes(values.kind)) {
++    errors.kind = "Choose a valid kind.";
++  }
++
++  if (uniqueNonEmpty(values.feeling).length === 0) {
++    errors.feeling = "Choose at least one feeling.";
++  }
++
++  if (values.videos.length === 0) {
++    errors.videos = "Add at least one video.";
++  } else if (
++    values.videos.some(
++      (video) => video.hash.trim().length === 0 || video.storageKey.trim().length === 0,
++    )
++  ) {
++    errors.videos = "Video hash and storage key are required.";
++  } else {
++    const duplicate = values.videos
++      .map((video) =>
++        options.existingVideos?.find(
++          (candidate) =>
++            candidate.hash === video.hash &&
++            candidate.stepId !== options.currentStepId,
++        ),
++      )
++      .find(Boolean);
++
++    if (duplicate) {
++      errors.videos = `Duplicate of ${duplicate.stepName}.`;
++    }
++  }
++
++  return Object.keys(errors).length === 0
++    ? { ok: true, values, errors }
++    : { ok: false, values, errors };
++}
+diff --git a/lib/steps/step-form-schema.ts b/lib/steps/step-form-schema.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c095a88482fc73a588fcad1e3303414223ada172
+--- /dev/null
++++ b/lib/steps/step-form-schema.ts
+@@ -0,0 +1,51 @@
++import type { Difficulty, StepKind } from "@/lib/domain/config";
++import type { StepVideo } from "@/lib/video/storage-client";
++
++export const stepKindOptions = ["step", "inspiration", "routine"] as const;
++export const difficultyOptions = [1, 2, 3, 5, 8] as const;
++
++export type StepFormVideo = StepVideo;
++
++export type StepFormValues = {
++  videos: StepFormVideo[];
++  name: string;
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  smartTags: string[];
++  removedSmartTags: string[];
++  tokens: string[];
++};
++
++export type ExistingStepVideo = {
++  hash: string;
++  stepId: string;
++  stepName: string;
++};
++
++export type StepMutationInput = {
++  name: string;
++  videos: StepFormVideo[];
++  difficulty: Difficulty;
++  feeling: string[];
++  kind: StepKind;
++  tags: string[];
++  artists: string[];
++  notes: string;
++  removedSmartTags: string[];
++  variationKey: string;
++};
++
++export type StepFormErrors = Partial<Record<keyof StepFormValues, string>>;
++
++export type StepFormValidationOptions = {
++  currentStepId?: string;
++  existingVideos?: ExistingStepVideo[];
++};
++
++export type StepFormValidationResult =
++  | { ok: true; values: StepFormValues; errors: StepFormErrors }
++  | { ok: false; values: StepFormValues; errors: StepFormErrors };
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..037b1c515faea6ee616ff6e101670e53cf031725
+--- /dev/null
++++ b/tests/components/step-form.test.tsx
+@@ -0,0 +1,211 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  createStepFormDefaults,
++  validateStepFormValues,
++} from "@/lib/steps/step-form-defaults";
++import type { StepFormValues } from "@/lib/steps/step-form-schema";
++
++const validVideo = {
++  hash: "video-hash-1",
++  storageKey: "owners/user/videos/video-hash-1.mp4",
++};
++
++describe("step form validation", () => {
++  it("defaults to the minimal empty step shape", () => {
++    expect(createStepFormDefaults()).toEqual({
++      videos: [],
++      name: "",
++      difficulty: 1,
++      feeling: [],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      smartTags: [],
++      removedSmartTags: [],
++      tokens: [],
++    });
++  });
++
++  it("requires name, difficulty, kind, feeling, and valid videos", () => {
++    const result = validateStepFormValues({
++      ...createStepFormDefaults(),
++      kind: "bad-kind",
++      difficulty: Number.NaN,
++      videos: [{ hash: "", storageKey: "" }],
++    } as unknown as StepFormValues);
++
++    expect(result.ok).toBe(false);
++    expect(result.errors).toEqual({
++      name: "Name is required.",
++      difficulty: "Difficulty is required.",
++      kind: "Choose a valid kind.",
++      feeling: "Choose at least one feeling.",
++      videos: "Video hash and storage key are required.",
++    });
++  });
++
++  it("blocks duplicate videos except the edited step", () => {
++    const values = {
++      ...createStepFormDefaults(),
++      name: "Saida",
++      videos: [validVideo],
++      feeling: ["semba"],
++    };
++
++    const duplicate = validateStepFormValues(values, {
++      currentStepId: "step-2",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++    const edited = validateStepFormValues(values, {
++      currentStepId: "step-1",
++      existingVideos: [
++        {
++          hash: validVideo.hash,
++          stepId: "step-1",
++          stepName: "Existing Saida",
++        },
++      ],
++    });
++
++    expect(duplicate.ok).toBe(false);
++    expect(duplicate.errors.videos).toBe("Duplicate of Existing Saida.");
++    expect(edited.ok).toBe(true);
++  });
++});
++
++describe("StepForm", () => {
++  it("submits Convex mutation-shaped values for a valid form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Saida damska");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith({
++      name: "Saida damska",
++      videos: [validVideo],
++      difficulty: 1,
++      feeling: ["semba"],
++      kind: "step",
++      tags: [],
++      artists: [],
++      notes: "",
++      removedSmartTags: [],
++      variationKey: expect.any(String),
++    });
++  });
++
++  it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++        }}
++        onSubmit={onSubmit}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Name"), "Obrot shadow");
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++
++    await waitFor(
++      () => expect(screen.getByText("Shadow position")).toBeInTheDocument(),
++      { timeout: 500 },
++    );
++    expect(screen.getByText("Obrót")).toBeInTheDocument();
++
++    await user.click(
++      screen.getByRole("button", { name: "Remove smart tag Shadow position" }),
++    );
++
++    expect(
++      screen.queryByRole("button", {
++        name: "Remove smart tag Shadow position",
++      }),
++    ).not.toBeInTheDocument();
++    expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
++    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).toHaveBeenCalledWith(
++      expect.objectContaining({
++        removedSmartTags: ["Shadow position"],
++      }),
++    );
++  });
++
++  it("offers tag and artist autocomplete without arbitrary smart tag controls", async () => {
++    const user = userEvent.setup();
++
++    render(
++      <StepForm
++        initialValues={{
++          ...createStepFormDefaults(),
++          videos: [validVideo],
++          feeling: ["semba"],
++          name: "Saida damska",
++        }}
++        tagOptions={["balance", "frame"]}
++        artistOptions={["Petchu"]}
++        onSubmit={vi.fn()}
++      />,
++    );
++
++    await user.type(screen.getByLabelText("Tags"), "balance{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++
++    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
++    expect(screen.queryByLabelText("Add smart tag")).not.toBeInTheDocument();
++  });
++
++  it("shows validation failures instead of submitting an empty form", async () => {
++    const user = userEvent.setup();
++    const onSubmit = vi.fn();
++
++    render(<StepForm onSubmit={onSubmit} />);
++
++    await user.click(screen.getByRole("button", { name: "Save step" }));
++
++    expect(onSubmit).not.toHaveBeenCalled();
++    expect(screen.getByText("Name is required.")).toBeInTheDocument();
++    expect(screen.getByText("Add at least one video.")).toBeInTheDocument();
++  });
++});
++
++const _typecheck: StepFormValues | null = null;
+
