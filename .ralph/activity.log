@@ -76,3 +76,8 @@
 [2026-05-07 21:36:10] Completed security performance regression review for S04-04
 [2026-05-07 21:37:30] Updated progress log for S04-04 inline edit modal
 [2026-05-07 21:39:24] ITERATION 4 end (duration=549s)
+[2026-05-07 21:55:58] ITERATION 1 start (mode=build story=S05-01-implement-search-filters-scoring-and-sorting)
+[2026-05-07 21:56:54] Start S05-01 search filters scoring sorting
+[2026-05-07 21:59:23] Implemented pure search helpers and filter/sort tests
+[2026-05-07 22:00:22] Verification passed: pnpm typecheck, pnpm lint, pnpm test -- --run, pnpm build
+[2026-05-07 22:00:22] Completed security performance regression review for S05-01
