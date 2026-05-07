@@ -207,7 +207,7 @@
     {
       "id": "S04-03-implement-edit-step-page",
       "title": "Implement Edit Step Page",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S04-02-implement-create-step-page"
       ],
@@ -218,8 +218,8 @@
         "Updated step appears in feed/list without stale data."
       ],
       "startedAt": "2026-05-07T19:18:42.318212+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T19:18:42.318455+00:00"
+      "completedAt": "2026-05-07T19:30:11.798170+00:00",
+      "updatedAt": "2026-05-07T19:30:11.798018+00:00"
     },
     {
       "id": "S04-04-implement-inline-edit-modal",
