@@ -60,6 +60,7 @@ export const updateStepInputValidator = v.object({
   notes: v.optional(v.string()),
   removedSmartTags: v.optional(v.array(v.string())),
   variationKey: v.optional(v.string()),
+  mergeVariationKeys: v.optional(v.array(v.string())),
 });
 
 export const practiceRecordInputValidator = v.object({

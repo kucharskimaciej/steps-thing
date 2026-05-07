@@ -41,6 +41,10 @@ async function getOwnedStep(
   return step;
 }
 
+function freshVariationKey() {
+  return crypto.randomUUID();
+}
+
 async function mergeVariationGroups({
   ctx,
   ownerId,
@@ -88,11 +92,22 @@ export const listMySteps = query({
 });
 
 export const getStepForEdit = query({
-  args: { id: v.id("steps") },
+  args: { id: v.string() },
   handler: async (ctx, args) => {
     const ownerId = await requireUserId(ctx);
+    const id = ctx.db.normalizeId("steps", args.id);
 
-    return await getOwnedStep(ctx, args.id, ownerId);
+    if (!id) {
+      return null;
+    }
+
+    const step = await ctx.db.get(id);
+
+    if (!step || step.ownerId !== ownerId) {
+      return null;
+    }
+
+    return step;
   },
 });
 
@@ -189,11 +204,22 @@ export const updateStep = mutation({
 
     const patch = buildStepPatch({
       existing: step,
-      input: args.input,
+      input: {
+        ...args.input,
+        variationKey: freshVariationKey(),
+      },
       now: Date.now(),
     });
 
     await ctx.db.patch(args.id, patch);
+
+    await mergeVariationGroups({
+      ctx,
+      ownerId,
+      mergeVariationKeys: args.input.mergeVariationKeys,
+      variationKey: patch.variationKey ?? step.variationKey,
+      now: patch.updatedAt ?? Date.now(),
+    });
 
     if (patch.videos) {
       await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);

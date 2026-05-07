@@ -1,4 +1,4 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { EditStepWorkflow } from "@/components/steps/edit-step-workflow";
 
 type EditStepPageProps = {
   params: Promise<{
@@ -9,10 +9,5 @@ type EditStepPageProps = {
 export default async function EditStepPage({ params }: EditStepPageProps) {
   const { stepId } = await params;
 
-  return (
-    <PlaceholderPage
-      title="Edit Step"
-      description={`Step edit placeholder for ${stepId}. Loading and mutations are implemented in later tasks.`}
-    />
-  );
+  return <EditStepWorkflow stepId={stepId} />;
 }
