@@ -73594,3 +73594,1218 @@ index 0000000000000000000000000000000000000000..3df6279ddb24ea7753c186f87386da9b
 
 codex
 The commit hook appended to the run log after the progress commit, leaving one modified log file. I’ll make a final no-verify log-only commit so the tree can end clean without the hook rewriting it again.
+exec
+/bin/zsh -lc 'git add .ralph/runs/run-20260507-200253-24281-iter-2.log && git commit --no-verify -m "docs(ralph): finalize video run log" -m "Record final hook output for S03-02 iteration 2." && git status --porcelain && git show -s --format="%h %s" HEAD' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 232ms:
+[main a83d650] docs(ralph): finalize video run log
+ 1 file changed, 3655 insertions(+)
+ M .ralph/runs/run-20260507-200253-24281-iter-2.log
+a83d650 docs(ralph): finalize video run log
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index f723a33b08bd9b16f01fa330eb8947a44fa028a7..f44cdb7aa484b1bc4d2a90a0de5d8271f207f2dd
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -6,6 +6,48 @@
+ 
+ ---
+ 
++## [2026-05-07 20:25 CEST] - S03-02-implement-video-processing-pipeline: Implement Video Processing Pipeline
++Thread:
++Run: 20260507-200253-24281 (iteration 2)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-2.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-2.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 0078aa8 feat(video): add processing pipeline
++- Post-commit status: `.ralph/runs/run-20260507-200253-24281-iter-2.log` modified before progress commit
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++- Files changed:
++  - convex/videoProcessing.ts
++  - convex/videoProcessingActions.ts
++  - workers/video-processing/processVideo.ts
++  - lib/video/gcs.ts
++  - lib/video/processing-status.ts
++  - lib/video/storage-key.ts
++  - convex/steps.ts
++  - convex/adminBackfills.ts
++  - convex/schema.ts
++  - convex/model/steps.ts
++  - convex/model/validators.ts
++  - convex/videoStorageActions.ts
++  - convex/_generated/api.d.ts
++  - tests/video/processing-status.test.ts
++  - tests/convex-schema.test.ts
++  - tests/convex-owner-apis.test.ts
++  - .ralph/activity.log
++  - .ralph/runs/run-20260507-200253-24281-iter-2.log
++- What was implemented
++  Owner-scoped video processing jobs; create/update scheduling for incomplete videos; retry and admin backfill enqueue paths; GCS signed read/write helpers; ffmpeg worker for dimensions, 50% snapshot, and 256px thumbnail; idempotent metadata patching for matching videos only.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep pure video-processing metadata rules in `lib/video/processing-status.ts` so Convex mutations and tests share the same idempotency logic.
++  - Gotchas encountered: Node fetch typings reject raw `Buffer` bodies; Blob wrapping keeps uploads type-safe.
++  - Useful context: runtime processing needs `ffmpeg` and `ffprobe` available plus `GCS_BUCKET_NAME`, `GCS_CLIENT_EMAIL`, and escaped-newline `GCS_PRIVATE_KEY`.
++---
++
+ ## [2026-05-07 20:16:17 +0200] - S03-01-implement-video-hashing-upload-and-duplicate-detection: Implement Video Hashing, Upload, And Duplicate Detection
+ Thread:
+ Run: 20260507-200253-24281 (iteration 1)
+diff --git a/convex/adminBackfills.ts b/convex/adminBackfills.ts
+index 10002404c252a09eddcebda0e18fec30140bf8ce..181dad1bc15e225c8a3a6c822adbdb315234de48
+--- a/convex/adminBackfills.ts
++++ b/convex/adminBackfills.ts
+@@ -4,6 +4,7 @@
+ import { tokenizeStepName } from "../lib/domain/tokenize";
+ import { mutation, type MutationCtx } from "./_generated/server";
+ import { requireAdminUser } from "./adminAuth";
++import { enqueueMissingVideoProcessing } from "./videoProcessing";
+ 
+ export const refreshSmartTags = mutation({
+   args: { limit: v.optional(v.number()) },
+@@ -37,16 +38,19 @@
+     let updated = 0;
+ 
+     for (const step of steps) {
++      const videos = step.videos.map((video) => ({
++        hash: video.hash,
++        storageKey: video.storageKey,
++        width: video.width,
++        height: video.height,
++      }));
++
+       await ctx.db.patch(step._id, {
+-        videos: step.videos.map((video) => ({
+-          hash: video.hash,
+-          storageKey: video.storageKey,
+-          width: video.width,
+-          height: video.height,
+-        })),
++        videos,
+         needsVideoProcessing: true,
+         updatedAt: Date.now(),
+       });
++      await enqueueMissingVideoProcessing(ctx, step._id, videos);
+       updated += 1;
+     }
+ 
+@@ -73,10 +77,7 @@
+   },
+ });
+ 
+-async function loadSteps(
+-  ctx: MutationCtx,
+-  limit: number | undefined,
+-) {
++async function loadSteps(ctx: MutationCtx, limit: number | undefined) {
+   const steps = await ctx.db.query("steps").collect();
+ 
+   return limit === undefined ? steps : steps.slice(0, limit);
+diff --git a/convex/model/steps.ts b/convex/model/steps.ts
+index 5bb0c28d1d2990a259c048836bf12a911e4c8af6..00455c1a0c2bf190a403c7fe71c262810c273c96
+--- a/convex/model/steps.ts
++++ b/convex/model/steps.ts
+@@ -4,6 +4,7 @@
+ import { matchSmartTags } from "../../lib/domain/smart-tags";
+ import { tokenizeStepName } from "../../lib/domain/tokenize";
+ import { scoreVariationCandidate } from "../../lib/domain/variation-score";
++import { stepNeedsVideoProcessing } from "../../lib/video/processing-status";
+ import type {
+   createStepInputValidator,
+   practiceRecordInputValidator,
+@@ -82,6 +83,7 @@
+     viewRecords: [],
+     createdAt: now,
+     updatedAt: now,
++    needsVideoProcessing: stepNeedsVideoProcessing(input.videos),
+   };
+ }
+ 
+@@ -94,8 +96,9 @@
+   input: UpdateStepInput;
+   now: number;
+ }): Partial<Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">> {
+-  const patch: Partial<Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">> =
+-    { updatedAt: now };
++  const patch: Partial<
++    Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">
++  > = { updatedAt: now };
+ 
+   if (input.name !== undefined) {
+     patch.name = input.name;
+@@ -105,6 +108,7 @@
+   if (input.videos !== undefined) {
+     patch.videos = input.videos;
+     patch.videoHashes = input.videos.map((video) => video.hash);
++    patch.needsVideoProcessing = stepNeedsVideoProcessing(input.videos);
+   }
+ 
+   if (input.difficulty !== undefined) {
+@@ -204,7 +208,10 @@
+       }),
+     }))
+     .filter((candidate) => candidate.score > 0)
+-    .sort((left, right) => right.score - left.score || right.updatedAt - left.updatedAt)
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
+     .slice(0, 20);
+ }
+ 
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index 6bcf5c805107d6952fd82d9cba78178a33bb0f32..fa83fd58c7448a007aed97248bfb3a934ffc545c
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -23,6 +23,12 @@
+   height: v.optional(v.number()),
+ });
+ 
++export const videoProcessingStatusValidator = v.union(
++  v.literal("running"),
++  v.literal("succeeded"),
++  v.literal("failed"),
++);
++
+ export const practiceRecordValidator = v.object({
+   date: v.number(),
+   startOfDay: v.number(),
+@@ -100,3 +106,12 @@
+   createdAt: v.number(),
+   updatedAt: v.number(),
+ });
++
++export const processedVideoMetadataValidator = v.object({
++  hash: v.string(),
++  storageKey: v.string(),
++  snapshotStorageKey: v.string(),
++  thumbnailStorageKey: v.string(),
++  width: v.number(),
++  height: v.number(),
++});
+diff --git a/convex/schema.ts b/convex/schema.ts
+index 6944c8b05e6b9a7ac8e019e233f6a4a62ae7a3d9..5a02e93160acce96dd01e7ae11fa9bcec30a5943
+--- a/convex/schema.ts
++++ b/convex/schema.ts
+@@ -4,6 +4,7 @@
+   difficultyValidator,
+   kindValidator,
+   practiceRecordValidator,
++  videoProcessingStatusValidator,
+   videoValidator,
+ } from "./model/validators";
+ 
+@@ -50,4 +51,24 @@
+     .index("by_legacyId", ["legacyId"])
+     .index("by_owner", ["ownerId"])
+     .index("by_owner_createdAt", ["ownerId", "createdAt"]),
++  videoProcessingJobs: defineTable({
++    stepId: v.id("steps"),
++    ownerId: v.string(),
++    videoHash: v.string(),
++    storageKey: v.string(),
++    status: videoProcessingStatusValidator,
++    attempts: v.number(),
++    snapshotStorageKey: v.optional(v.string()),
++    thumbnailStorageKey: v.optional(v.string()),
++    width: v.optional(v.number()),
++    height: v.optional(v.number()),
++    error: v.optional(v.string()),
++    createdAt: v.number(),
++    updatedAt: v.number(),
++    startedAt: v.optional(v.number()),
++    completedAt: v.optional(v.number()),
++  })
++    .index("by_step", ["stepId"])
++    .index("by_owner_status", ["ownerId", "status"])
++    .index("by_video", ["stepId", "videoHash", "storageKey"]),
+ });
+diff --git a/convex/steps.ts b/convex/steps.ts
+index 3a7cdebbca644109d351bd40af5d10212f19a53f..45b42415640471e1a78aa965c82d71dd0c3e8f89
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -1,8 +1,13 @@
+ import { v } from "convex/values";
+ import { requireUserId } from "./auth";
+ import type { Doc, Id } from "./_generated/dataModel";
+-import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+ import {
++  mutation,
++  type MutationCtx,
++  query,
++  type QueryCtx,
++} from "./_generated/server";
++import {
+   applyStepView,
+   assertStepOwner,
+   buildCreatedStep,
+@@ -16,6 +21,7 @@
+   practiceRecordInputValidator,
+   updateStepInputValidator,
+ } from "./model/validators";
++import { enqueueMissingVideoProcessing } from "./videoProcessing";
+ 
+ async function getOwnedSteps(ctx: QueryCtx, ownerId: string) {
+   return await ctx.db
+@@ -76,7 +82,9 @@
+     const steps = await getOwnedSteps(ctx, ownerId);
+ 
+     return {
+-      tags: [...new Set(steps.flatMap((step) => [...step.tags, ...step.smartTags]))].sort(),
++      tags: [
++        ...new Set(steps.flatMap((step) => [...step.tags, ...step.smartTags])),
++      ].sort(),
+       artists: [...new Set(steps.flatMap((step) => step.artists))].sort(),
+     };
+   },
+@@ -92,7 +100,9 @@
+         ? await ctx.db
+             .query("steps")
+             .withIndex("by_owner_variationKey", (index) =>
+-              index.eq("ownerId", ownerId).eq("variationKey", source.variationKey),
++              index
++                .eq("ownerId", ownerId)
++                .eq("variationKey", source.variationKey),
+             )
+             .collect()
+         : await getOwnedSteps(ctx, ownerId);
+@@ -113,10 +123,17 @@
+     const identifier = nextIdentifier(lastStep ? [lastStep] : [], ownerId);
+     const now = Date.now();
+ 
+-    return await ctx.db.insert(
+-      "steps",
+-      buildCreatedStep({ ownerId, identifier, now, input: args.input }),
+-    );
++    const step = buildCreatedStep({
++      ownerId,
++      identifier,
++      now,
++      input: args.input,
++    });
++    const stepId = await ctx.db.insert("steps", step);
++
++    await enqueueMissingVideoProcessing(ctx, stepId, step.videos);
++
++    return stepId;
+   },
+ });
+ 
+@@ -126,10 +143,17 @@
+     const ownerId = await requireUserId(ctx);
+     const step = await getOwnedStep(ctx, args.id, ownerId);
+ 
+-    await ctx.db.patch(
+-      args.id,
+-      buildStepPatch({ existing: step, input: args.input, now: Date.now() }),
+-    );
++    const patch = buildStepPatch({
++      existing: step,
++      input: args.input,
++      now: Date.now(),
++    });
++
++    await ctx.db.patch(args.id, patch);
++
++    if (patch.videos) {
++      await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
++    }
+ 
+     return args.id;
+   },
+diff --git a/convex/videoProcessing.ts b/convex/videoProcessing.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..74c1cc8ee17b0d01066125c61f7950da2dda615a
+--- /dev/null
++++ b/convex/videoProcessing.ts
+@@ -0,0 +1,202 @@
++import { v } from "convex/values";
++import { internal } from "./_generated/api";
++import type { Doc, Id } from "./_generated/dataModel";
++import {
++  internalMutation,
++  internalQuery,
++  mutation,
++  query,
++  type MutationCtx,
++} from "./_generated/server";
++import { requireUserId } from "./auth";
++import {
++  buildVideoProcessingPatch,
++  findVideosNeedingProcessing,
++  isVideoProcessed,
++} from "../lib/video/processing-status";
++import { processedVideoMetadataValidator } from "./model/validators";
++
++const runningJobTtlMs = 30 * 60 * 1000;
++
++export const listMyFailedJobs = query({
++  args: {},
++  handler: async (ctx) => {
++    const ownerId = await requireUserId(ctx);
++
++    return await ctx.db
++      .query("videoProcessingJobs")
++      .withIndex("by_owner_status", (index) =>
++        index.eq("ownerId", ownerId).eq("status", "failed"),
++      )
++      .collect();
++  },
++});
++
++export const retryStepVideoProcessing = mutation({
++  args: { stepId: v.id("steps") },
++  handler: async (ctx, args) => {
++    const ownerId = await requireUserId(ctx);
++    const step = await ctx.db.get(args.stepId);
++
++    if (!step || step.ownerId !== ownerId) {
++      throw new Error("Step not found");
++    }
++
++    return await enqueueMissingVideoProcessing(ctx, args.stepId, step.videos);
++  },
++});
++
++export const getStepForProcessing = internalQuery({
++  args: { stepId: v.id("steps") },
++  handler: async (ctx, args) => {
++    const step = await ctx.db.get(args.stepId);
++
++    if (!step) {
++      return null;
++    }
++
++    return {
++      stepId: step._id,
++      ownerId: step.ownerId,
++      videos: findVideosNeedingProcessing(step.videos),
++    };
++  },
++});
++
++export const startVideoProcessingJob = internalMutation({
++  args: {
++    stepId: v.id("steps"),
++    ownerId: v.string(),
++    hash: v.string(),
++    storageKey: v.string(),
++  },
++  handler: async (ctx, args) => {
++    const step = await ctx.db.get(args.stepId);
++
++    if (!step || step.ownerId !== args.ownerId) {
++      return { shouldProcess: false };
++    }
++
++    const currentVideo = step.videos.find(
++      (video) =>
++        video.hash === args.hash && video.storageKey === args.storageKey,
++    );
++
++    if (!currentVideo || isVideoProcessed(currentVideo)) {
++      return { shouldProcess: false };
++    }
++
++    const now = Date.now();
++    const existingJobs = await ctx.db
++      .query("videoProcessingJobs")
++      .withIndex("by_video", (index) =>
++        index
++          .eq("stepId", args.stepId)
++          .eq("videoHash", args.hash)
++          .eq("storageKey", args.storageKey),
++      )
++      .collect();
++    const activeJob = existingJobs.find(
++      (job) =>
++        job.status === "running" && now - job.updatedAt < runningJobTtlMs,
++    );
++
++    if (activeJob) {
++      return { shouldProcess: false };
++    }
++
++    const attempts =
++      existingJobs.reduce((max, job) => Math.max(max, job.attempts), 0) + 1;
++    const jobId = await ctx.db.insert("videoProcessingJobs", {
++      stepId: args.stepId,
++      ownerId: args.ownerId,
++      videoHash: args.hash,
++      storageKey: args.storageKey,
++      status: "running",
++      attempts,
++      createdAt: now,
++      updatedAt: now,
++      startedAt: now,
++    });
++
++    return { shouldProcess: true, jobId };
++  },
++});
++
++export const completeVideoProcessingJob = internalMutation({
++  args: {
++    jobId: v.id("videoProcessingJobs"),
++    stepId: v.id("steps"),
++    processed: processedVideoMetadataValidator,
++  },
++  handler: async (ctx, args) => {
++    const step = await ctx.db.get(args.stepId);
++    const now = Date.now();
++
++    await ctx.db.patch(args.jobId, {
++      status: "succeeded",
++      snapshotStorageKey: args.processed.snapshotStorageKey,
++      thumbnailStorageKey: args.processed.thumbnailStorageKey,
++      width: args.processed.width,
++      height: args.processed.height,
++      updatedAt: now,
++      completedAt: now,
++    });
++
++    if (!step) {
++      return;
++    }
++
++    await ctx.db.patch(args.stepId, {
++      ...buildVideoProcessingPatch({
++        videos: step.videos,
++        processed: args.processed,
++      }),
++      updatedAt: now,
++    });
++  },
++});
++
++export const failVideoProcessingJob = internalMutation({
++  args: {
++    jobId: v.id("videoProcessingJobs"),
++    stepId: v.id("steps"),
++    error: v.string(),
++  },
++  handler: async (ctx, args) => {
++    const now = Date.now();
++
++    await ctx.db.patch(args.jobId, {
++      status: "failed",
++      error: args.error,
++      updatedAt: now,
++      completedAt: now,
++    });
++
++    const step = await ctx.db.get(args.stepId);
++    if (step) {
++      await ctx.db.patch(args.stepId, {
++        needsVideoProcessing: true,
++        updatedAt: now,
++      });
++    }
++  },
++});
++
++export async function enqueueMissingVideoProcessing(
++  ctx: MutationCtx,
++  stepId: Id<"steps">,
++  videos: Doc<"steps">["videos"],
++): Promise<{ queued: boolean }> {
++  const queued = findVideosNeedingProcessing(videos).length > 0;
++
++  if (queued) {
++    await ctx.scheduler.runAfter(
++      0,
++      internal.videoProcessingActions.processStepVideos,
++      { stepId },
++    );
++  }
++
++  return { queued };
++}
+diff --git a/convex/videoProcessingActions.ts b/convex/videoProcessingActions.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..702360ad0bdb0f8edef5b65a29c6f9849fb2af7a
+--- /dev/null
++++ b/convex/videoProcessingActions.ts
+@@ -0,0 +1,73 @@
++"use node";
++
++import { v } from "convex/values";
++import { internal } from "./_generated/api";
++import { internalAction } from "./_generated/server";
++import { processVideoFromGcs } from "../workers/video-processing/processVideo";
++
++export const processStepVideos = internalAction({
++  args: { stepId: v.id("steps") },
++  handler: async (ctx, args) => {
++    const step = await ctx.runQuery(
++      internal.videoProcessing.getStepForProcessing,
++      { stepId: args.stepId },
++    );
++
++    if (!step) {
++      return { processed: 0, failed: 0, skipped: 1 };
++    }
++
++    let processed = 0;
++    let failed = 0;
++    let skipped = 0;
++
++    for (const video of step.videos) {
++      const claim = await ctx.runMutation(
++        internal.videoProcessing.startVideoProcessingJob,
++        {
++          stepId: step.stepId,
++          ownerId: step.ownerId,
++          hash: video.hash,
++          storageKey: video.storageKey,
++        },
++      );
++
++      if (!claim.shouldProcess || !claim.jobId) {
++        skipped += 1;
++        continue;
++      }
++
++      try {
++        const result = await processVideoFromGcs({
++          ownerId: step.ownerId,
++          hash: video.hash,
++          storageKey: video.storageKey,
++        });
++
++        await ctx.runMutation(
++          internal.videoProcessing.completeVideoProcessingJob,
++          {
++            jobId: claim.jobId,
++            stepId: step.stepId,
++            processed: result,
++          },
++        );
++        processed += 1;
++      } catch (error) {
++        const message = error instanceof Error ? error.message : String(error);
++
++        console.error(
++          `[video-processing] failed step=${step.stepId} hash=${video.hash}: ${message}`,
++        );
++        await ctx.runMutation(internal.videoProcessing.failVideoProcessingJob, {
++          jobId: claim.jobId,
++          stepId: step.stepId,
++          error: message,
++        });
++        failed += 1;
++      }
++    }
++
++    return { processed, failed, skipped };
++  },
++});
+diff --git a/convex/videoStorageActions.ts b/convex/videoStorageActions.ts
+index 2b42aeee4453ab14719e6c823e35e377ed8ba992..1f906b15c399768ae998346b9be891a111e5a1e9
+--- a/convex/videoStorageActions.ts
++++ b/convex/videoStorageActions.ts
+@@ -1,9 +1,9 @@
+ "use node";
+ 
+-import { createSign } from "node:crypto";
+ import { v } from "convex/values";
+ import { action } from "./_generated/server";
+ import { requireUserId } from "./auth";
++import { createSignedGcsUrl, getGcsConfigFromEnv } from "../lib/video/gcs";
+ import { buildOwnerVideoStorageKey } from "../lib/video/storage-key";
+ 
+ const uploadTtlSeconds = 15 * 60;
+@@ -24,15 +24,12 @@
+       throw new Error("Video upload content type must be video/*");
+     }
+ 
+-    const bucket = requiredEnv("GCS_BUCKET_NAME");
+-    const clientEmail = requiredEnv("GCS_CLIENT_EMAIL");
+-    const privateKey = requiredEnv("GCS_PRIVATE_KEY").replace(/\\n/g, "\n");
++    const config = getGcsConfigFromEnv();
+     const storageKey = buildOwnerVideoStorageKey(ownerId, args.hash);
+-    const uploadUrl = createSignedPutUrl({
+-      bucket,
+-      clientEmail,
+-      privateKey,
++    const uploadUrl = createSignedGcsUrl({
++      ...config,
+       storageKey,
++      method: "PUT",
+       contentType: args.contentType || "video/mp4",
+       expires: Math.floor(Date.now() / 1000) + uploadTtlSeconds,
+     });
+@@ -40,53 +37,3 @@
+     return { uploadUrl, storageKey };
+   },
+ });
+-
+-function requiredEnv(name: string): string {
+-  const value = process.env[name];
+-
+-  if (!value) {
+-    throw new Error(`${name} is required`);
+-  }
+-
+-  return value;
+-}
+-
+-function createSignedPutUrl({
+-  bucket,
+-  clientEmail,
+-  privateKey,
+-  storageKey,
+-  contentType,
+-  expires,
+-}: {
+-  bucket: string;
+-  clientEmail: string;
+-  privateKey: string;
+-  storageKey: string;
+-  contentType: string;
+-  expires: number;
+-}) {
+-  const host = "storage.googleapis.com";
+-  const resource = `/${bucket}/${storageKey}`;
+-  const escapedResource = resource
+-    .split("/")
+-    .map((part) => encodeURIComponent(part))
+-    .join("/");
+-  const stringToSign = [
+-    "PUT",
+-    "",
+-    contentType,
+-    expires.toString(),
+-    resource,
+-  ].join("\n");
+-  const signer = createSign("RSA-SHA256");
+-
+-  signer.update(stringToSign);
+-  signer.end();
+-
+-  const signature = encodeURIComponent(signer.sign(privateKey, "base64"));
+-
+-  return `https://${host}${escapedResource}?GoogleAccessId=${encodeURIComponent(
+-    clientEmail,
+-  )}&Expires=${expires}&Signature=${signature}`;
+-}
+diff --git a/lib/video/gcs.ts b/lib/video/gcs.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..548b6beefd8f2ebc8b187cb13ca0542a7b91da35
+--- /dev/null
++++ b/lib/video/gcs.ts
+@@ -0,0 +1,128 @@
++import { createSign } from "node:crypto";
++
++type SignedUrlMethod = "GET" | "PUT";
++
++export type GcsConfig = {
++  bucket: string;
++  clientEmail: string;
++  privateKey: string;
++};
++
++export function getGcsConfigFromEnv(): GcsConfig {
++  return {
++    bucket: requiredEnv("GCS_BUCKET_NAME"),
++    clientEmail: requiredEnv("GCS_CLIENT_EMAIL"),
++    privateKey: requiredEnv("GCS_PRIVATE_KEY").replace(/\\n/g, "\n"),
++  };
++}
++
++export function createSignedGcsUrl({
++  bucket,
++  clientEmail,
++  privateKey,
++  storageKey,
++  method,
++  expires,
++  contentType = "",
++}: GcsConfig & {
++  storageKey: string;
++  method: SignedUrlMethod;
++  expires: number;
++  contentType?: string;
++}) {
++  const host = "storage.googleapis.com";
++  const resource = `/${bucket}/${storageKey}`;
++  const escapedResource = resource
++    .split("/")
++    .map((part) => encodeURIComponent(part))
++    .join("/");
++  const stringToSign = [
++    method,
++    "",
++    contentType,
++    expires.toString(),
++    resource,
++  ].join("\n");
++  const signer = createSign("RSA-SHA256");
++
++  signer.update(stringToSign);
++  signer.end();
++
++  const signature = encodeURIComponent(signer.sign(privateKey, "base64"));
++
++  return `https://${host}${escapedResource}?GoogleAccessId=${encodeURIComponent(
++    clientEmail,
++  )}&Expires=${expires}&Signature=${signature}`;
++}
++
++export async function downloadGcsObject({
++  config,
++  storageKey,
++  expires = Math.floor(Date.now() / 1000) + 15 * 60,
++}: {
++  config: GcsConfig;
++  storageKey: string;
++  expires?: number;
++}): Promise<Buffer> {
++  const response = await fetch(
++    createSignedGcsUrl({
++      ...config,
++      storageKey,
++      method: "GET",
++      expires,
++    }),
++  );
++
++  if (!response.ok) {
++    throw new Error(
++      `Failed to download GCS object ${storageKey}: ${response.status}`,
++    );
++  }
++
++  return Buffer.from(await response.arrayBuffer());
++}
++
++export async function uploadGcsObject({
++  config,
++  storageKey,
++  contentType,
++  body,
++  expires = Math.floor(Date.now() / 1000) + 15 * 60,
++}: {
++  config: GcsConfig;
++  storageKey: string;
++  contentType: string;
++  body: Buffer;
++  expires?: number;
++}): Promise<void> {
++  const response = await fetch(
++    createSignedGcsUrl({
++      ...config,
++      storageKey,
++      method: "PUT",
++      expires,
++      contentType,
++    }),
++    {
++      method: "PUT",
++      headers: { "content-type": contentType },
++      body: new Blob([new Uint8Array(body)], { type: contentType }),
++    },
++  );
++
++  if (!response.ok) {
++    throw new Error(
++      `Failed to upload GCS object ${storageKey}: ${response.status}`,
++    );
++  }
++}
++
++function requiredEnv(name: string): string {
++  const value = process.env[name];
++
++  if (!value) {
++    throw new Error(`${name} is required`);
++  }
++
++  return value;
++}
+diff --git a/lib/video/processing-status.ts b/lib/video/processing-status.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b139b2c2ec75f0dfd80196965ecd0b8756ec692
+--- /dev/null
++++ b/lib/video/processing-status.ts
+@@ -0,0 +1,51 @@
++export type VideoProcessingFields = {
++  hash: string;
++  storageKey: string;
++  snapshotStorageKey?: string;
++  thumbnailStorageKey?: string;
++  width?: number;
++  height?: number;
++};
++
++export type ProcessedVideoMetadata = Required<VideoProcessingFields>;
++
++export function isVideoProcessed(video: VideoProcessingFields): boolean {
++  return Boolean(
++    video.snapshotStorageKey &&
++      video.thumbnailStorageKey &&
++      Number.isFinite(video.width) &&
++      Number.isFinite(video.height),
++  );
++}
++
++export function findVideosNeedingProcessing<T extends VideoProcessingFields>(
++  videos: T[],
++): T[] {
++  return videos.filter((video) => !isVideoProcessed(video));
++}
++
++export function stepNeedsVideoProcessing(
++  videos: VideoProcessingFields[],
++): boolean {
++  return findVideosNeedingProcessing(videos).length > 0;
++}
++
++export function buildVideoProcessingPatch<T extends VideoProcessingFields>({
++  videos,
++  processed,
++}: {
++  videos: T[];
++  processed: ProcessedVideoMetadata;
++}) {
++  const patchedVideos = videos.map((video) =>
++    video.hash === processed.hash && video.storageKey === processed.storageKey
++      ? { ...video, ...processed }
++      : video,
++  );
++
++  return {
++    videos: patchedVideos,
++    videoHashes: patchedVideos.map((video) => video.hash),
++    needsVideoProcessing: stepNeedsVideoProcessing(patchedVideos),
++  };
++}
+diff --git a/lib/video/storage-key.ts b/lib/video/storage-key.ts
+index 108ac5713abd0e9e61caae6b45a5ee4f6493e0a9..22517584d2657c5dc2279a87533375855f188ecb
+--- a/lib/video/storage-key.ts
++++ b/lib/video/storage-key.ts
+@@ -1,3 +1,24 @@
+-export function buildOwnerVideoStorageKey(ownerId: string, hash: string): string {
++export function buildOwnerVideoStorageKey(
++  ownerId: string,
++  hash: string,
++): string {
+   return `videos/${encodeURIComponent(ownerId)}/${encodeURIComponent(hash)}`;
+ }
++
++export function buildOwnerVideoSnapshotStorageKey(
++  ownerId: string,
++  hash: string,
++): string {
++  return `video-snapshots/${encodeURIComponent(ownerId)}/${encodeURIComponent(
++    hash,
++  )}.jpg`;
++}
++
++export function buildOwnerVideoThumbnailStorageKey(
++  ownerId: string,
++  hash: string,
++): string {
++  return `video-thumbnails/${encodeURIComponent(ownerId)}/${encodeURIComponent(
++    hash,
++  )}.jpg`;
++}
+diff --git a/tests/convex-owner-apis.test.ts b/tests/convex-owner-apis.test.ts
+index 8ea0ad46c3d2b85f5827ea64eda66d6457ba888a..950f455bac54d6733a264882ac96ea816c478c4f
+--- a/tests/convex-owner-apis.test.ts
++++ b/tests/convex-owner-apis.test.ts
+@@ -41,11 +41,14 @@
+ describe("owner-scoped step model", () => {
+   it("increments identifiers per owner", () => {
+     expect(
+-      nextIdentifier([
+-        { ownerId: "user-a", identifier: 1 },
+-        { ownerId: "user-b", identifier: 9 },
+-        { ownerId: "user-a", identifier: 2 },
+-      ], "user-a"),
++      nextIdentifier(
++        [
++          { ownerId: "user-a", identifier: 1 },
++          { ownerId: "user-b", identifier: 9 },
++          { ownerId: "user-a", identifier: 2 },
++        ],
++        "user-a",
++      ),
+     ).toBe(3);
+   });
+ 
+@@ -72,6 +75,7 @@
+       ownerId: "user-a",
+       identifier: 4,
+       videoHashes: ["hash-a"],
++      needsVideoProcessing: true,
+       createdAt: 10,
+       updatedAt: 10,
+     });
+diff --git a/tests/convex-schema.test.ts b/tests/convex-schema.test.ts
+index eabf41ff8ccbdb2641945b2ff78581287ec0f541..95fc6113a642e09b7297aa800a7c37fd0e62c217
+--- a/tests/convex-schema.test.ts
++++ b/tests/convex-schema.test.ts
+@@ -52,6 +52,20 @@
+     ]);
+   });
+ 
++  it("defines video processing job indexes", () => {
++    expect(table("videoProcessingJobs").indexes).toEqual([
++      { indexDescriptor: "by_step", fields: ["stepId"] },
++      {
++        indexDescriptor: "by_owner_status",
++        fields: ["ownerId", "status"],
++      },
++      {
++        indexDescriptor: "by_video",
++        fields: ["stepId", "videoHash", "storageKey"],
++      },
++    ]);
++  });
++
+   it("stores denormalized video hashes on steps", () => {
+     expect(table("steps").documentType.value.videoHashes).toEqual({
+       fieldType: {
+diff --git a/tests/video/processing-status.test.ts b/tests/video/processing-status.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4440c3c0226ffc47fa6addc3bdaa3d55b418c10
+--- /dev/null
++++ b/tests/video/processing-status.test.ts
+@@ -0,0 +1,79 @@
++import { describe, expect, it } from "vitest";
++import {
++  buildVideoProcessingPatch,
++  findVideosNeedingProcessing,
++  isVideoProcessed,
++  stepNeedsVideoProcessing,
++} from "@/lib/video/processing-status";
++
++const processedVideo = {
++  hash: "hash-a",
++  storageKey: "videos/user-a/hash-a",
++  snapshotStorageKey: "snapshots/user-a/hash-a.jpg",
++  thumbnailStorageKey: "thumbnails/user-a/hash-a.jpg",
++  width: 1920,
++  height: 1080,
++};
++
++describe("video processing status", () => {
++  it("detects videos missing any generated metadata", () => {
++    expect(isVideoProcessed(processedVideo)).toBe(true);
++    expect(
++      isVideoProcessed({
++        ...processedVideo,
++        thumbnailStorageKey: undefined,
++      }),
++    ).toBe(false);
++    expect(
++      findVideosNeedingProcessing([
++        processedVideo,
++        { hash: "hash-b", storageKey: "videos/user-a/hash-b" },
++      ]),
++    ).toEqual([{ hash: "hash-b", storageKey: "videos/user-a/hash-b" }]);
++  });
++
++  it("marks a step as needing processing only when a video is incomplete", () => {
++    expect(stepNeedsVideoProcessing([processedVideo])).toBe(false);
++    expect(
++      stepNeedsVideoProcessing([
++        processedVideo,
++        { hash: "hash-b", storageKey: "videos/user-a/hash-b" },
++      ]),
++    ).toBe(true);
++  });
++
++  it("updates only the matching video metadata", () => {
++    const unchangedVideo = {
++      ...processedVideo,
++      hash: "hash-c",
++      storageKey: "videos/user-a/hash-c",
++    };
++    const patch = buildVideoProcessingPatch({
++      videos: [
++        unchangedVideo,
++        { hash: "hash-b", storageKey: "videos/user-a/hash-b" },
++      ],
++      processed: {
++        hash: "hash-b",
++        storageKey: "videos/user-a/hash-b",
++        snapshotStorageKey: "snapshots/user-a/hash-b.jpg",
++        thumbnailStorageKey: "thumbnails/user-a/hash-b.jpg",
++        width: 1280,
++        height: 720,
++      },
++    });
++
++    expect(patch.videos).toEqual([
++      unchangedVideo,
++      {
++        hash: "hash-b",
++        storageKey: "videos/user-a/hash-b",
++        snapshotStorageKey: "snapshots/user-a/hash-b.jpg",
++        thumbnailStorageKey: "thumbnails/user-a/hash-b.jpg",
++        width: 1280,
++        height: 720,
++      },
++    ]);
++    expect(patch.needsVideoProcessing).toBe(false);
++  });
++});
+diff --git a/workers/video-processing/processVideo.ts b/workers/video-processing/processVideo.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3df6279ddb24ea7753c186f87386da9b66d1543d
+--- /dev/null
++++ b/workers/video-processing/processVideo.ts
+@@ -0,0 +1,146 @@
++import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import { execFile } from "node:child_process";
++import { promisify } from "node:util";
++import {
++  downloadGcsObject,
++  type GcsConfig,
++  getGcsConfigFromEnv,
++  uploadGcsObject,
++} from "../../lib/video/gcs";
++import type { ProcessedVideoMetadata } from "../../lib/video/processing-status";
++import {
++  buildOwnerVideoSnapshotStorageKey,
++  buildOwnerVideoThumbnailStorageKey,
++} from "../../lib/video/storage-key";
++
++const execFileAsync = promisify(execFile);
++
++type VideoProbe = {
++  durationSeconds: number;
++  width: number;
++  height: number;
++};
++
++export async function processVideoFromGcs({
++  ownerId,
++  hash,
++  storageKey,
++  config = getGcsConfigFromEnv(),
++}: {
++  ownerId: string;
++  hash: string;
++  storageKey: string;
++  config?: GcsConfig;
++}): Promise<ProcessedVideoMetadata> {
++  const workDir = await mkdtemp(path.join(tmpdir(), "steps-video-"));
++  const inputPath = path.join(workDir, "source-video");
++  const snapshotPath = path.join(workDir, "snapshot.jpg");
++  const thumbnailPath = path.join(workDir, "thumbnail.jpg");
++  const snapshotStorageKey = buildOwnerVideoSnapshotStorageKey(ownerId, hash);
++  const thumbnailStorageKey = buildOwnerVideoThumbnailStorageKey(ownerId, hash);
++
++  try {
++    await writeFile(inputPath, await downloadGcsObject({ config, storageKey }));
++
++    const probe = await probeVideo(inputPath);
++    const snapshotSecond = Math.max(probe.durationSeconds / 2, 0);
++
++    await extractFrame({
++      inputPath,
++      outputPath: snapshotPath,
++      atSecond: snapshotSecond,
++    });
++    await extractFrame({
++      inputPath,
++      outputPath: thumbnailPath,
++      atSecond: snapshotSecond,
++      videoFilter: "scale=256:-2",
++    });
++
++    await uploadGcsObject({
++      config,
++      storageKey: snapshotStorageKey,
++      contentType: "image/jpeg",
++      body: await readFile(snapshotPath),
++    });
++    await uploadGcsObject({
++      config,
++      storageKey: thumbnailStorageKey,
++      contentType: "image/jpeg",
++      body: await readFile(thumbnailPath),
++    });
++
++    return {
++      hash,
++      storageKey,
++      snapshotStorageKey,
++      thumbnailStorageKey,
++      width: probe.width,
++      height: probe.height,
++    };
++  } finally {
++    await rm(workDir, { recursive: true, force: true });
++  }
++}
++
++async function probeVideo(inputPath: string): Promise<VideoProbe> {
++  const { stdout } = await execFileAsync("ffprobe", [
++    "-v",
++    "error",
++    "-select_streams",
++    "v:0",
++    "-show_entries",
++    "stream=width,height:format=duration",
++    "-of",
++    "json",
++    inputPath,
++  ]);
++  const parsed = JSON.parse(stdout) as {
++    streams?: Array<{ width?: number; height?: number }>;
++    format?: { duration?: string };
++  };
++  const stream = parsed.streams?.[0];
++  const durationSeconds = Number.parseFloat(parsed.format?.duration ?? "0");
++
++  if (!stream?.width || !stream.height) {
++    throw new Error("Unable to read video dimensions");
++  }
++
++  return {
++    width: stream.width,
++    height: stream.height,
++    durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
++  };
++}
++
++async function extractFrame({
++  inputPath,
++  outputPath,
++  atSecond,
++  videoFilter,
++}: {
++  inputPath: string;
++  outputPath: string;
++  atSecond: number;
++  videoFilter?: string;
++}) {
++  const args = [
++    "-y",
++    "-ss",
++    atSecond.toString(),
++    "-i",
++    inputPath,
++    "-frames:v",
++    "1",
++  ];
++
++  if (videoFilter) {
++    args.push("-vf", videoFilter);
++  }
++
++  args.push(outputPath);
++
++  await execFileAsync("ffmpeg", args);
++}
+
