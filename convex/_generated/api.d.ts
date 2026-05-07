@@ -17,6 +17,8 @@ import type * as model_steps from "../model/steps.js";
 import type * as model_validators from "../model/validators.js";
 import type * as practiceSessions from "../practiceSessions.js";
 import type * as steps from "../steps.js";
+import type * as videoStorage from "../videoStorage.js";
+import type * as videoStorageActions from "../videoStorageActions.js";
 
 import type {
   ApiFromModules,
@@ -34,6 +36,8 @@ declare const fullApi: ApiFromModules<{
   "model/validators": typeof model_validators;
   practiceSessions: typeof practiceSessions;
   steps: typeof steps;
+  videoStorage: typeof videoStorage;
+  videoStorageActions: typeof videoStorageActions;
 }>;
 
 /**

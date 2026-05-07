@@ -17,3 +17,8 @@
 2026-05-07T19:54:06+02:00 Verification: audit, dry-run, typecheck, lint, test, build, Convex dev once completed
 2026-05-07T19:55:38+02:00 Updated progress log for S02-04 migration tooling
 [2026-05-07 19:57:19] ITERATION 1 end (duration=977s)
+[2026-05-07 20:02:53] ITERATION 1 start (mode=build story=S03-01-implement-video-hashing-upload-and-duplicate-detection)
+[2026-05-07 20:03:41] Start S03-01 video hashing upload duplicate detection
+[2026-05-07 20:08:40] Implemented video hashing upload helpers Convex API and upload field
+[2026-05-07 20:12:19] Verification completed: typecheck lint test build Convex dev once; browser redirected unauthenticated /steps/new without console errors
+[2026-05-07 20:15:49] Final verification passed and review completed for S03-01
