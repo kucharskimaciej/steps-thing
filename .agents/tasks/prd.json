@@ -224,7 +224,7 @@
     {
       "id": "S04-04-implement-inline-edit-modal",
       "title": "Implement Inline Edit Modal",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S04-03-implement-edit-step-page"
       ],
@@ -234,8 +234,8 @@
         "Modal is keyboard and pointer accessible."
       ],
       "startedAt": "2026-05-07T19:30:16.028872+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T19:30:16.029051+00:00"
+      "completedAt": "2026-05-07T19:39:25.023430+00:00",
+      "updatedAt": "2026-05-07T19:39:25.023128+00:00"
     },
     {
       "id": "S05-01-implement-search-filters-scoring-and-sorting",
