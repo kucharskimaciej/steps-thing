@@ -173,7 +173,7 @@
     {
       "id": "S04-01-build-step-form-validation-and-smart-tags",
       "title": "Build Step Form Validation And Smart Tags",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S03-03-build-video-player-and-modal"
       ],
@@ -184,8 +184,8 @@
         "Form output matches the Convex step mutation input."
       ],
       "startedAt": "2026-05-07T18:54:47.909132+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T18:54:47.909337+00:00"
+      "completedAt": "2026-05-07T19:07:30.544901+00:00",
+      "updatedAt": "2026-05-07T19:07:30.544696+00:00"
     },
     {
       "id": "S04-02-implement-create-step-page",
