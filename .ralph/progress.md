@@ -6,6 +6,47 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 20:37:41 CEST] - S03-03-build-video-player-and-modal: Build Video Player And Modal
+Thread:
+Run: 20260507-200253-24281 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-200253-24281-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 492ebf3 feat(video): add reusable player
+- Post-commit status: clean after final progress commit
+- Verification:
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm test` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser temporary route check at http://localhost:3001/video-player-check` -> PASS
+  - Command: `pnpm exec biome format components/video/aspect-aware-video.tsx components/video/video-controls.tsx components/video/video-modal.tsx components/video/video-player.tsx components/video/video-progress.tsx tests/components/video-player.test.tsx` -> PASS
+  - Command: `pnpm format:check` -> FAIL (pre-existing formatter drift outside story files)
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIPPED (no Convex schema/functions changed)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/.tmp/prompt-20260507-200253-24281-3.md
+  - .ralph/.tmp/story-20260507-200253-24281-3.json
+  - .ralph/.tmp/story-20260507-200253-24281-3.md
+  - .ralph/runs/run-20260507-200253-24281-iter-3.log
+  - components/video/aspect-aware-video.tsx
+  - components/video/video-controls.tsx
+  - components/video/video-modal.tsx
+  - components/video/video-player.tsx
+  - components/video/video-progress.tsx
+  - tests/components/video-player.test.tsx
+- What was implemented
+  Reusable looped muted video player, center play/pause overlay, accessible mute/full-size/seek/restart/slow-motion controls, progress bar, 80% viewed callback with <10% reset, blurred snapshot background, borderless full-size modal, visible autoplay behavior, and aspect-aware rotation for landscape video on narrow portrait clients.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep player state local and expose `onViewed`, `videoUrl`, `snapshotUrl`, dimensions, autoplay, and full-size flags for feed/public/session reuse.
+  - Gotchas encountered: rapid `timeupdate` events can beat React state, so viewed tracking needs a ref latch.
+  - Useful context: browser verification used a temporary Next route that was removed before commit; `format:check` still fails on unrelated pre-existing files, but new story files pass targeted Biome formatting.
+---
+
 ## [2026-05-07 20:25 CEST] - S03-02-implement-video-processing-pipeline: Implement Video Processing Pipeline
 Thread:
 Run: 20260507-200253-24281 (iteration 2)
