@@ -463,3 +463,45 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-21
   - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
   - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
 ---
+## [2026-05-07 22:32:24 +0200] - S05-04-implement-view-and-practice-recording: Implement View And Practice Recording
+Thread:
+Run: 20260507-215557-6595 (iteration 4)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 14d81c7 feat(feed): record views and practice
+- Post-commit status: clean after progress commit
+- Verification:
+  - Command: pnpm test tests/components/feed.test.tsx tests/practice/has-recorded-practice.test.ts tests/convex-owner-apis.test.ts --run -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: browser smoke http://localhost:3001/feed -> PASS (auth redirect, no console errors)
+  - Command: git diff --check -> PASS
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-4.log
+  - .ralph/.tmp/prompt-20260507-215557-6595-4.md
+  - .ralph/.tmp/story-20260507-215557-6595-4.json
+  - .ralph/.tmp/story-20260507-215557-6595-4.md
+  - components/feed/feed-step-card.tsx
+  - components/feed/step-actions.tsx
+  - components/practice/record-practice-button.tsx
+  - lib/feed/viewed-steps-memory.ts
+  - lib/practice/has-recorded-practice.ts
+  - tests/components/feed.test.tsx
+  - tests/convex-owner-apis.test.ts
+  - tests/practice/has-recorded-practice.test.ts
+- What was implemented
+  - Connected feed player `viewed` events to `recordStepView` with per-load client de-dupe.
+  - Added practiced-state helper/button with optimistic UI and disabled duplicate clicks.
+  - Covered same-day general vs collection-specific practice behavior.
+- **Learnings for future iterations:**
+  - Feed player already emits `onViewed`; only feed card wiring was missing.
+  - `recordPractice` server model already de-dupes by `startOfDay` plus optional collection ID.
+  - Browser feed smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
+---
