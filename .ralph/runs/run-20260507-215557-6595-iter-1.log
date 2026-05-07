@@ -12921,3 +12921,5511 @@ index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354ea
 
 codex
 Review complete: no new I/O, auth surface, secrets, or Convex writes; helper work is in-memory and isolated. I’m staging per the Ralph instruction and committing the story implementation.
+exec
+/bin/zsh -lc 'git add -A && git diff --cached --stat && git diff --cached --name-only' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 149ms:
+ .agents/tasks/prd.json                          |     7 +-
+ .ralph/.tmp/prompt-20260507-215557-6595-1.md    |   239 +
+ .ralph/.tmp/story-20260507-215557-6595-1.json   |    15 +
+ .ralph/.tmp/story-20260507-215557-6595-1.md     |   106 +
+ .ralph/activity.log                             |     5 +
+ .ralph/runs/run-20260507-215557-6595-iter-1.log | 12923 ++++++++++++++++++++++
+ lib/search/filter-steps.ts                      |    46 +
+ lib/search/query-search.ts                      |   106 +
+ lib/search/score-result.ts                      |    30 +
+ lib/search/sort-results.ts                      |    83 +
+ lib/search/types.ts                             |    62 +
+ tests/search/search-helpers.test.ts             |   245 +
+ 12 files changed, 13865 insertions(+), 2 deletions(-)
+.agents/tasks/prd.json
+.ralph/.tmp/prompt-20260507-215557-6595-1.md
+.ralph/.tmp/story-20260507-215557-6595-1.json
+.ralph/.tmp/story-20260507-215557-6595-1.md
+.ralph/activity.log
+.ralph/runs/run-20260507-215557-6595-iter-1.log
+lib/search/filter-steps.ts
+lib/search/query-search.ts
+lib/search/score-result.ts
+lib/search/sort-results.ts
+lib/search/types.ts
+tests/search/search-helpers.test.ts
+
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+exec
+/bin/zsh -lc 'git commit -m "feat(search): add feed search helpers" -m "Implement pure feed search helpers for text matching, filters, score calculation, and sort modes. Add focused unit coverage for required S05-01 filter and sorting semantics.
+
+Reference: S05-01"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 2439ms:
+
+> steps-thing@0.1.0 typecheck /Users/maciejkucharski/work/steps-thing
+> tsc --noEmit
+
+
+> steps-thing@0.1.0 lint /Users/maciejkucharski/work/steps-thing
+> biome lint .
+
+Checked 120 files in 34ms. No fixes applied.
+[feat/feed-search-and-practice 4a4788d] feat(search): add feed search helpers
+ 12 files changed, 13865 insertions(+), 2 deletions(-)
+ create mode 100644 .ralph/.tmp/prompt-20260507-215557-6595-1.md
+ create mode 100644 .ralph/.tmp/story-20260507-215557-6595-1.json
+ create mode 100644 .ralph/.tmp/story-20260507-215557-6595-1.md
+ create mode 100644 .ralph/runs/run-20260507-215557-6595-iter-1.log
+ create mode 100644 lib/search/filter-steps.ts
+ create mode 100644 lib/search/query-search.ts
+ create mode 100644 lib/search/score-result.ts
+ create mode 100644 lib/search/sort-results.ts
+ create mode 100644 lib/search/types.ts
+ create mode 100644 tests/search/search-helpers.test.ts
+
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+exec
+/bin/zsh -lc 'git show -s --format="%h %s" HEAD' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+4a4788d feat(search): add feed search helpers
+
+exec
+/bin/zsh -lc 'git status --porcelain=v1' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/runs/run-20260507-215557-6595-iter-1.log
+
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+exec
+/bin/zsh -lc "date '+%Y-%m-%d %H:%M:%S %z'" in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+2026-05-07 22:00:44 +0200
+
+exec
+/bin/zsh -lc 'tail -n 80 .ralph/progress.md' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+  Owner-scoped Convex auth helper, step queries/mutations, practice session queries/mutations, lock checks, identifier allocation, idempotent practice/session step handling, public step read without ownerId exposure, and focused model/auth tests.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep Convex entry points thin and put behavior in `convex/model/*` helpers for unit coverage.
+  - Gotchas encountered: `pnpm test -- --run` discovers nested `.codex` skill tests unless Vitest excludes `.codex`.
+  - Useful context: `pnpm build` rewrites `next-env.d.ts` between dev/build route type imports; reverted generated churn after build validation.
+---
+
+## [2026-05-07 21:06:08 +0200] - S04-01-build-step-form-validation-and-smart-tags: Build Step Form Validation And Smart Tags
+Thread:
+Run: 20260507-205447-62953 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 71a4d85 feat(steps): add shared step form
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test tests/components/step-form.test.tsx -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser http://localhost:3001/step-form-preview temporary route` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/forms/checklist.tsx
+  - components/forms/select.tsx
+  - components/forms/tags-input.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - lib/steps/step-form-defaults.ts
+  - lib/steps/step-form-schema.ts
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Shared step form defaults, validation, duplicate video checks, debounced token/smart-tag derivation, removed smart-tag restore flow, controlled smart-tag UI, tag/artist autocomplete from existing user data, and create-page wiring.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep form validation and smart-tag derivation pure so tests do not need Convex or Clerk.
+  - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
+  - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
+---
+
+## [2026-05-07 21:17:12 +0200] - S04-02-implement-create-step-page: Implement Create Step Page
+Thread:
+Run: 20260507-205447-62953 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: e465728 feat(steps): implement create step page
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
+  - Command: `dev-browser http://localhost:3001/steps/new` -> PASS, protected route redirected to sign-in without app crash; create workflow verified by component tests
+- Files changed:
+  - app/(authenticated)/steps/new/page.tsx
+  - components/steps/create-step-workflow.tsx
+  - components/steps/step-form.tsx
+  - components/steps/step-form-with-user-data.tsx
+  - components/steps/variation-candidate-list.tsx
+  - components/steps/variation-toggle.tsx
+  - convex/model/validators.ts
+  - convex/steps.ts
+  - tests/components/create-step-page.test.tsx
+  - tests/components/step-form.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+- What was implemented
+  Authenticated create workflow at `/steps/new`, split layout, top save actions, upload-enabled shared form, existing tags/artists queries, candidate ranking from live form data, variation group selection, create persistence, server-side variation group merge, and save-and-create-another preservation/reset behavior.
+- **Learnings for future iterations:**
+  - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
+  - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+  - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+---
+
+exec
+/bin/zsh -lc "git show --name-only --format='' HEAD | sed '/"'^$/d'"'" in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+.agents/tasks/prd.json
+.ralph/.tmp/prompt-20260507-215557-6595-1.md
+.ralph/.tmp/story-20260507-215557-6595-1.json
+.ralph/.tmp/story-20260507-215557-6595-1.md
+.ralph/activity.log
+.ralph/runs/run-20260507-215557-6595-iter-1.log
+lib/search/filter-steps.ts
+lib/search/query-search.ts
+lib/search/score-result.ts
+lib/search/sort-results.ts
+lib/search/types.ts
+tests/search/search-helpers.test.ts
+
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+codex
+Implementation commit is `4a4788d feat(search): add feed search helpers`. I’m appending the required Ralph progress entry, then I’ll commit the progress/log update separately and confirm clean status.
+apply patch
+patch: completed
+/Users/maciejkucharski/work/steps-thing/.ralph/progress.md
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index bafa8925c058c6c2a2dcc7972a5a1a132589412d..97b863b1d2e7d1c9a6ce8883276349d2aa66071a
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -349,3 +349,41 @@
+   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+ ---
++
++## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
++Thread:
++Run: 20260507-215557-6595 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 4a4788d feat(search): add feed search helpers
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
++  - .ralph/.tmp/story-20260507-215557-6595-1.json
++  - .ralph/.tmp/story-20260507-215557-6595-1.md
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-1.log
++  - lib/search/filter-steps.ts
++  - lib/search/query-search.ts
++  - lib/search/score-result.ts
++  - lib/search/sort-results.ts
++  - lib/search/types.ts
++  - tests/search/search-helpers.test.ts
++- What was implemented
++  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
++  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
++  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
++---
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index bafa8925c058c6c2a2dcc7972a5a1a132589412d..97b863b1d2e7d1c9a6ce8883276349d2aa66071a
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -349,3 +349,41 @@
+   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+ ---
++
++## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
++Thread:
++Run: 20260507-215557-6595 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 4a4788d feat(search): add feed search helpers
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
++  - .ralph/.tmp/story-20260507-215557-6595-1.json
++  - .ralph/.tmp/story-20260507-215557-6595-1.md
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-1.log
++  - lib/search/filter-steps.ts
++  - lib/search/query-search.ts
++  - lib/search/score-result.ts
++  - lib/search/sort-results.ts
++  - lib/search/types.ts
++  - tests/search/search-helpers.test.ts
++- What was implemented
++  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
++  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
++  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
++---
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+exec
+/bin/zsh -lc 'ralph log "Updated progress log for S05-01 search filters scoring sorting"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+Using local templates: /Users/maciejkucharski/work/steps-thing/.agents/ralph
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index bafa8925c058c6c2a2dcc7972a5a1a132589412d..97b863b1d2e7d1c9a6ce8883276349d2aa66071a
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -349,3 +349,41 @@
+   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+ ---
++
++## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
++Thread:
++Run: 20260507-215557-6595 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 4a4788d feat(search): add feed search helpers
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
++  - .ralph/.tmp/story-20260507-215557-6595-1.json
++  - .ralph/.tmp/story-20260507-215557-6595-1.md
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-1.log
++  - lib/search/filter-steps.ts
++  - lib/search/query-search.ts
++  - lib/search/score-result.ts
++  - lib/search/sort-results.ts
++  - lib/search/types.ts
++  - tests/search/search-helpers.test.ts
++- What was implemented
++  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
++  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
++  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
++---
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+
+exec
+/bin/zsh -lc 'git status --porcelain=v1' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+ M .ralph/activity.log
+ M .ralph/progress.md
+ M .ralph/runs/run-20260507-215557-6595-iter-1.log
+
+exec
+/bin/zsh -lc "git diff -- .ralph/activity.log .ralph/progress.md .ralph/runs/run-20260507-215557-6595-iter-1.log | sed -n '1,260p'" in /Users/maciejkucharski/work/steps-thing
+ succeeded in 0ms:
+diff --git a/.ralph/activity.log b/.ralph/activity.log
+index 8aa627e..3c6acba 100644
+--- a/.ralph/activity.log
++++ b/.ralph/activity.log
+@@ -81,3 +81,4 @@
+ [2026-05-07 21:59:23] Implemented pure search helpers and filter/sort tests
+ [2026-05-07 22:00:22] Verification passed: pnpm typecheck, pnpm lint, pnpm test -- --run, pnpm build
+ [2026-05-07 22:00:22] Completed security performance regression review for S05-01
++[2026-05-07 22:01:11] Updated progress log for S05-01 search filters scoring sorting
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index bafa892..97b863b 100644
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -349,3 +349,41 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-20
+   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+ ---
++
++## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
++Thread:
++Run: 20260507-215557-6595 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 4a4788d feat(search): add feed search helpers
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
++  - .ralph/.tmp/story-20260507-215557-6595-1.json
++  - .ralph/.tmp/story-20260507-215557-6595-1.md
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-1.log
++  - lib/search/filter-steps.ts
++  - lib/search/query-search.ts
++  - lib/search/score-result.ts
++  - lib/search/sort-results.ts
++  - lib/search/types.ts
++  - tests/search/search-helpers.test.ts
++- What was implemented
++  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
++  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
++  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
++---
+diff --git a/.ralph/runs/run-20260507-215557-6595-iter-1.log b/.ralph/runs/run-20260507-215557-6595-iter-1.log
+index 1adcb26..301a241 100644
+--- a/.ralph/runs/run-20260507-215557-6595-iter-1.log
++++ b/.ralph/runs/run-20260507-215557-6595-iter-1.log
+@@ -12921,3 +12921,4585 @@ index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354ea
+ 
+ codex
+ Review complete: no new I/O, auth surface, secrets, or Convex writes; helper work is in-memory and isolated. I’m staging per the Ralph instruction and committing the story implementation.
++exec
++/bin/zsh -lc 'git add -A && git diff --cached --stat && git diff --cached --name-only' in /Users/maciejkucharski/work/steps-thing
++ succeeded in 149ms:
++ .agents/tasks/prd.json                          |     7 +-
++ .ralph/.tmp/prompt-20260507-215557-6595-1.md    |   239 +
++ .ralph/.tmp/story-20260507-215557-6595-1.json   |    15 +
++ .ralph/.tmp/story-20260507-215557-6595-1.md     |   106 +
++ .ralph/activity.log                             |     5 +
++ .ralph/runs/run-20260507-215557-6595-iter-1.log | 12923 ++++++++++++++++++++++
++ lib/search/filter-steps.ts                      |    46 +
++ lib/search/query-search.ts                      |   106 +
++ lib/search/score-result.ts                      |    30 +
++ lib/search/sort-results.ts                      |    83 +
++ lib/search/types.ts                             |    62 +
++ tests/search/search-helpers.test.ts             |   245 +
++ 12 files changed, 13865 insertions(+), 2 deletions(-)
++.agents/tasks/prd.json
++.ralph/.tmp/prompt-20260507-215557-6595-1.md
++.ralph/.tmp/story-20260507-215557-6595-1.json
++.ralph/.tmp/story-20260507-215557-6595-1.md
++.ralph/activity.log
++.ralph/runs/run-20260507-215557-6595-iter-1.log
++lib/search/filter-steps.ts
++lib/search/query-search.ts
++lib/search/score-result.ts
++lib/search/sort-results.ts
++lib/search/types.ts
++tests/search/search-helpers.test.ts
++
++diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
++new file mode 100644
++index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
++--- /dev/null
+++++ b/lib/search/filter-steps.ts
++@@ -0,0 +1,46 @@
+++import type { SearchState, SearchableStep } from "./types";
+++
+++export function matchesSearchFilters(
+++  step: SearchableStep,
+++  state: SearchState,
+++): boolean {
+++  const tagSet = new Set([...step.tags, ...step.smartTags]);
+++
+++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
+++    return false;
+++  }
+++
+++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
+++    return false;
+++  }
+++
+++  if (
+++    state.anyArtists.length > 0 &&
+++    !state.anyArtists.some((artist) => step.artists.includes(artist))
+++  ) {
+++    return false;
+++  }
+++
+++  const positiveFeelings = Object.entries(state.feeling)
+++    .filter(([, value]) => value === 1)
+++    .map(([feeling]) => feeling);
+++  const negativeFeelings = Object.entries(state.feeling)
+++    .filter(([, value]) => value === -1)
+++    .map(([feeling]) => feeling);
+++
+++  if (
+++    positiveFeelings.length > 0 &&
+++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
+++  ) {
+++    return false;
+++  }
+++
+++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
+++}
+++
+++export function filterSteps<TStep extends SearchableStep>(
+++  steps: TStep[],
+++  state: SearchState,
+++): TStep[] {
+++  return steps.filter((step) => matchesSearchFilters(step, state));
+++}
++diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
++new file mode 100644
++index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
++--- /dev/null
+++++ b/lib/search/query-search.ts
++@@ -0,0 +1,106 @@
+++import { filterSteps } from "./filter-steps";
+++import { scoreStepSearchResult } from "./score-result";
+++import {
+++  sortSearchResults,
+++  type SortSearchResultsOptions,
+++} from "./sort-results";
+++import {
+++  DEFAULT_SEARCH_STATE,
+++  type SearchResult,
+++  type SearchState,
+++  type SearchableStep,
+++} from "./types";
+++
+++const FUZZY_THRESHOLD = 0.4;
+++
+++function normalizeText(value: string): string {
+++  return value
+++    .toLocaleLowerCase("pl-PL")
+++    .normalize("NFD")
+++    .replace(/\p{Diacritic}/gu, "");
+++}
+++
+++function levenshteinDistance(left: string, right: string): number {
+++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+++  const current = Array.from({ length: right.length + 1 }, () => 0);
+++
+++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+++    current[0] = leftIndex;
+++
+++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+++      const substitutionCost =
+++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+++
+++      current[rightIndex] = Math.min(
+++        previous[rightIndex] + 1,
+++        current[rightIndex - 1] + 1,
+++        previous[rightIndex - 1] + substitutionCost,
+++      );
+++    }
+++
+++    for (let index = 0; index < previous.length; index += 1) {
+++      previous[index] = current[index];
+++    }
+++  }
+++
+++  return previous[right.length] ?? 0;
+++}
+++
+++function bestSubstringDistance(query: string, text: string): number {
+++  if (query.length >= text.length) {
+++    return levenshteinDistance(query, text);
+++  }
+++
+++  let best = Number.POSITIVE_INFINITY;
+++
+++  for (let start = 0; start <= text.length - query.length; start += 1) {
+++    const candidate = text.slice(start, start + query.length);
+++    best = Math.min(best, levenshteinDistance(query, candidate));
+++  }
+++
+++  return best;
+++}
+++
+++export function fuzzyScoreStepName(
+++  step: Pick<SearchableStep, "name">,
+++  query: string,
+++): number | undefined {
+++  const normalizedQuery = normalizeText(query.trim());
+++
+++  if (normalizedQuery.length === 0) {
+++    return undefined;
+++  }
+++
+++  const normalizedName = normalizeText(step.name);
+++
+++  if (normalizedName.includes(normalizedQuery)) {
+++    return 0;
+++  }
+++
+++  const score =
+++    bestSubstringDistance(normalizedQuery, normalizedName) /
+++    normalizedQuery.length;
+++
+++  return score <= FUZZY_THRESHOLD ? score : undefined;
+++}
+++
+++export function querySearch<TStep extends SearchableStep>(
+++  steps: TStep[],
+++  state: SearchState = DEFAULT_SEARCH_STATE,
+++  options: SortSearchResultsOptions = {},
+++): SearchResult<TStep>[] {
+++  const scoredResults = filterSteps(steps, state)
+++    .map((step) => ({
+++      step,
+++      fuzzyScore: fuzzyScoreStepName(step, state.query),
+++    }))
+++    .filter(
+++      (result) =>
+++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
+++    )
+++    .map(({ step, fuzzyScore }) =>
+++      scoreStepSearchResult({ step, state, fuzzyScore }),
+++    );
+++
+++  return sortSearchResults(scoredResults, state.sort, options);
+++}
++diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
++new file mode 100644
++index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
++--- /dev/null
+
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index bafa8925c058c6c2a2dcc7972a5a1a132589412d..97b863b1d2e7d1c9a6ce8883276349d2aa66071a
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -349,3 +349,41 @@
+   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
+   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+ ---
++
++## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
++Thread:
++Run: 20260507-215557-6595 (iteration 1)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: 4a4788d feat(search): add feed search helpers
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
++- Files changed:
++  - .agents/tasks/prd.json
++  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
++  - .ralph/.tmp/story-20260507-215557-6595-1.json
++  - .ralph/.tmp/story-20260507-215557-6595-1.md
++  - .ralph/activity.log
++  - .ralph/progress.md
++  - .ralph/runs/run-20260507-215557-6595-iter-1.log
++  - lib/search/filter-steps.ts
++  - lib/search/query-search.ts
++  - lib/search/score-result.ts
++  - lib/search/sort-results.ts
++  - lib/search/types.ts
++  - tests/search/search-helpers.test.ts
++- What was implemented
++  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
++- **Learnings for future iterations:**
++  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
++  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
++  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
++---
+diff --git a/lib/search/filter-steps.ts b/lib/search/filter-steps.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..398722b86677070ab91c68554d66716c6616b354
+--- /dev/null
++++ b/lib/search/filter-steps.ts
+@@ -0,0 +1,46 @@
++import type { SearchState, SearchableStep } from "./types";
++
++export function matchesSearchFilters(
++  step: SearchableStep,
++  state: SearchState,
++): boolean {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++
++  if (!state.includeAllTags.every((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (state.excludeAnyTags.some((tag) => tagSet.has(tag))) {
++    return false;
++  }
++
++  if (
++    state.anyArtists.length > 0 &&
++    !state.anyArtists.some((artist) => step.artists.includes(artist))
++  ) {
++    return false;
++  }
++
++  const positiveFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === 1)
++    .map(([feeling]) => feeling);
++  const negativeFeelings = Object.entries(state.feeling)
++    .filter(([, value]) => value === -1)
++    .map(([feeling]) => feeling);
++
++  if (
++    positiveFeelings.length > 0 &&
++    !positiveFeelings.some((feeling) => step.feeling.includes(feeling))
++  ) {
++    return false;
++  }
++
++  return !negativeFeelings.some((feeling) => step.feeling.includes(feeling));
++}
++
++export function filterSteps<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState,
++): TStep[] {
++  return steps.filter((step) => matchesSearchFilters(step, state));
++}
+diff --git a/lib/search/query-search.ts b/lib/search/query-search.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..951b8e0f82a02049a15105a74de572d74be92ce8
+--- /dev/null
++++ b/lib/search/query-search.ts
+@@ -0,0 +1,106 @@
++import { filterSteps } from "./filter-steps";
++import { scoreStepSearchResult } from "./score-result";
++import {
++  sortSearchResults,
++  type SortSearchResultsOptions,
++} from "./sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchResult,
++  type SearchState,
++  type SearchableStep,
++} from "./types";
++
++const FUZZY_THRESHOLD = 0.4;
++
++function normalizeText(value: string): string {
++  return value
++    .toLocaleLowerCase("pl-PL")
++    .normalize("NFD")
++    .replace(/\p{Diacritic}/gu, "");
++}
++
++function levenshteinDistance(left: string, right: string): number {
++  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
++  const current = Array.from({ length: right.length + 1 }, () => 0);
++
++  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
++    current[0] = leftIndex;
++
++    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
++      const substitutionCost =
++        left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
++
++      current[rightIndex] = Math.min(
++        previous[rightIndex] + 1,
++        current[rightIndex - 1] + 1,
++        previous[rightIndex - 1] + substitutionCost,
++      );
++    }
++
++    for (let index = 0; index < previous.length; index += 1) {
++      previous[index] = current[index];
++    }
++  }
++
++  return previous[right.length] ?? 0;
++}
++
++function bestSubstringDistance(query: string, text: string): number {
++  if (query.length >= text.length) {
++    return levenshteinDistance(query, text);
++  }
++
++  let best = Number.POSITIVE_INFINITY;
++
++  for (let start = 0; start <= text.length - query.length; start += 1) {
++    const candidate = text.slice(start, start + query.length);
++    best = Math.min(best, levenshteinDistance(query, candidate));
++  }
++
++  return best;
++}
++
++export function fuzzyScoreStepName(
++  step: Pick<SearchableStep, "name">,
++  query: string,
++): number | undefined {
++  const normalizedQuery = normalizeText(query.trim());
++
++  if (normalizedQuery.length === 0) {
++    return undefined;
++  }
++
++  const normalizedName = normalizeText(step.name);
++
++  if (normalizedName.includes(normalizedQuery)) {
++    return 0;
++  }
++
++  const score =
++    bestSubstringDistance(normalizedQuery, normalizedName) /
++    normalizedQuery.length;
++
++  return score <= FUZZY_THRESHOLD ? score : undefined;
++}
++
++export function querySearch<TStep extends SearchableStep>(
++  steps: TStep[],
++  state: SearchState = DEFAULT_SEARCH_STATE,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  const scoredResults = filterSteps(steps, state)
++    .map((step) => ({
++      step,
++      fuzzyScore: fuzzyScoreStepName(step, state.query),
++    }))
++    .filter(
++      (result) =>
++        state.query.trim().length === 0 || result.fuzzyScore !== undefined,
++    )
++    .map(({ step, fuzzyScore }) =>
++      scoreStepSearchResult({ step, state, fuzzyScore }),
++    );
++
++  return sortSearchResults(scoredResults, state.sort, options);
++}
+diff --git a/lib/search/score-result.ts b/lib/search/score-result.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d67a6683a534580958c70681a6f02841338e1b80
+--- /dev/null
++++ b/lib/search/score-result.ts
+@@ -0,0 +1,30 @@
++import type { SearchResult, SearchState, SearchableStep } from "./types";
++
++export function scoreStepSearchResult<TStep extends SearchableStep>({
++  step,
++  state,
++  fuzzyScore,
++}: {
++  step: TStep;
++  state: SearchState;
++  fuzzyScore?: number;
++}): SearchResult<TStep> {
++  const tagSet = new Set([...step.tags, ...step.smartTags]);
++  const textScore = (1 - (fuzzyScore ?? 0)) * 200;
++  const tagScore =
++    state.includeAllTags.filter((tag) => tagSet.has(tag)).length * 20;
++  const positiveFeelingScore =
++    Object.entries(state.feeling).filter(
++      ([feeling, value]) => value === 1 && step.feeling.includes(feeling),
++    ).length * 20;
++
++  return {
++    step,
++    fuzzyScore,
++    score: textScore + tagScore + positiveFeelingScore,
++  };
++}
++
++export function scoreSearchResult(result: SearchResult): number {
++  return result.score;
++}
+diff --git a/lib/search/sort-results.ts b/lib/search/sort-results.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef0752dfb7eb1f11d52ad2e0784b7f918f9765d
+--- /dev/null
++++ b/lib/search/sort-results.ts
+@@ -0,0 +1,83 @@
++import type { SearchResult, SearchSort, SearchableStep } from "./types";
++
++export type SortSearchResultsOptions = {
++  random?: () => number;
++};
++
++function directionMultiplier(direction: SearchSort["direction"]): number {
++  return direction === "DESCENDING" ? -1 : 1;
++}
++
++function newestPracticeDate(step: SearchableStep): number {
++  return step.practiceRecords[0]?.date ?? 0;
++}
++
++function newestViewDate(step: SearchableStep): number {
++  return step.viewRecords[0] ?? 0;
++}
++
++function primaryValue(result: SearchResult, type: SearchSort["type"]): number {
++  switch (type) {
++    case "SCORE":
++      return result.score;
++    case "VIEW_DATE":
++      return newestViewDate(result.step);
++    case "VIEW_COUNT":
++      return result.step.viewRecords.length;
++    case "PRACTICE_DATE":
++      return newestPracticeDate(result.step);
++    case "ADDED_DATE":
++      return result.step.createdAt;
++    case "RANDOM":
++      return 0;
++  }
++}
++
++function compareSearchResults(
++  left: SearchResult,
++  right: SearchResult,
++  sort: SearchSort,
++): number {
++  const primary =
++    (primaryValue(left, sort.type) - primaryValue(right, sort.type)) *
++    directionMultiplier(sort.direction);
++
++  if (primary !== 0) {
++    return primary;
++  }
++
++  return (
++    (left.step.updatedAt - right.step.updatedAt) *
++    directionMultiplier(
++      sort.direction === "DESCENDING" ? "ASCENDING" : "DESCENDING",
++    )
++  );
++}
++
++function shuffle<T>(items: T[], random: () => number): T[] {
++  const shuffled = [...items];
++
++  for (let index = shuffled.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [shuffled[index], shuffled[swapIndex]] = [
++      shuffled[swapIndex],
++      shuffled[index],
++    ];
++  }
++
++  return shuffled;
++}
++
++export function sortSearchResults<TStep extends SearchableStep>(
++  results: SearchResult<TStep>[],
++  sort: SearchSort,
++  options: SortSearchResultsOptions = {},
++): SearchResult<TStep>[] {
++  if (sort.type === "RANDOM") {
++    return shuffle(results, options.random ?? Math.random);
++  }
++
++  return [...results].sort((left, right) =>
++    compareSearchResults(left, right, sort),
++  );
++}
+diff --git a/lib/search/types.ts b/lib/search/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e95674ec54d4eec96fb95e7da903225dea45926
+--- /dev/null
++++ b/lib/search/types.ts
+@@ -0,0 +1,62 @@
++export type FeelingFilterValue = -1 | 0 | 1;
++
++export type SearchSortType =
++  | "SCORE"
++  | "VIEW_DATE"
++  | "VIEW_COUNT"
++  | "PRACTICE_DATE"
++  | "ADDED_DATE"
++  | "RANDOM";
++
++export type SearchSortDirection = "ASCENDING" | "DESCENDING";
++
++export type SearchSort = {
++  type: SearchSortType;
++  direction: SearchSortDirection;
++};
++
++export type SearchState = {
++  query: string;
++  feeling: Record<string, FeelingFilterValue>;
++  includeAllTags: string[];
++  excludeAnyTags: string[];
++  anyArtists: string[];
++  sort: SearchSort;
++};
++
++export type SearchablePracticeRecord = {
++  date: number;
++  startOfDay: number;
++  collectionId?: unknown;
++};
++
++export type SearchableStep = {
++  _id?: string;
++  name: string;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  feeling: string[];
++  viewRecords: number[];
++  practiceRecords: SearchablePracticeRecord[];
++  createdAt: number;
++  updatedAt: number;
++};
++
++export type SearchResult<TStep extends SearchableStep = SearchableStep> = {
++  step: TStep;
++  fuzzyScore?: number;
++  score: number;
++};
++
++export const DEFAULT_SEARCH_STATE: SearchState = {
++  query: "",
++  feeling: {},
++  includeAllTags: [],
++  excludeAnyTags: [],
++  anyArtists: [],
++  sort: {
++    type: "ADDED_DATE",
++    direction: "DESCENDING",
++  },
++};
+diff --git a/tests/search/search-helpers.test.ts b/tests/search/search-helpers.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d9051027ba4c06d30ce510953a354eaec9788cf
+--- /dev/null
++++ b/tests/search/search-helpers.test.ts
+@@ -0,0 +1,245 @@
++import { describe, expect, it } from "vitest";
++import { querySearch } from "@/lib/search/query-search";
++import { scoreSearchResult } from "@/lib/search/score-result";
++import { sortSearchResults } from "@/lib/search/sort-results";
++import {
++  DEFAULT_SEARCH_STATE,
++  type SearchState,
++  type SearchableStep,
++} from "@/lib/search/types";
++
++function step(
++  id: string,
++  overrides: Partial<SearchableStep> = {},
++): SearchableStep {
++  return {
++    _id: id,
++    name: id,
++    tags: [],
++    smartTags: [],
++    artists: [],
++    feeling: [],
++    viewRecords: [],
++    practiceRecords: [],
++    createdAt: 0,
++    updatedAt: 0,
++    ...overrides,
++  };
++}
++
++const baseState: SearchState = {
++  ...DEFAULT_SEARCH_STATE,
++  sort: { type: "ADDED_DATE", direction: "DESCENDING" },
++};
++
++describe("querySearch filters", () => {
++  it("uses default search with added date descending", () => {
++    const results = querySearch([
++      step("old", { createdAt: 10 }),
++      step("new", { createdAt: 30 }),
++      step("middle", { createdAt: 20 }),
++    ]);
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "new",
++      "middle",
++      "old",
++    ]);
++  });
++
++  it("matches text query against step name with fuzzy threshold", () => {
++    const results = querySearch([
++      step("match", { name: "Shadow position turn" }),
++      step("fuzzy", { name: "Shado position" }),
++      step("miss", { name: "Saida basic" }),
++    ], {
++      ...baseState,
++      query: "shadow",
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "match",
++      "fuzzy",
++    ]);
++    expect(results[0]?.fuzzyScore).toBe(0);
++  });
++
++  it("requires every included tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("both", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("one", { tags: ["turn"] }),
++      step("none", { smartTags: ["Shadow position"] }),
++    ], {
++      ...baseState,
++      includeAllTags: ["turn", "Shadow position"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["both"]);
++  });
++
++  it("rejects any excluded tag across tags and smart tags", () => {
++    const results = querySearch([
++      step("keep", { tags: ["turn"], smartTags: ["Shadow position"] }),
++      step("reject-tag", { tags: ["drop"] }),
++      step("reject-smart", { smartTags: ["drop"] }),
++    ], {
++      ...baseState,
++      excludeAnyTags: ["drop"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["keep"]);
++  });
++
++  it("matches any selected artist", () => {
++    const results = querySearch([
++      step("petchu", { artists: ["Petchu"], createdAt: 10 }),
++      step("kwenda", { artists: ["Kwenda Lima"], createdAt: 20 }),
++      step("other", { artists: ["Other"] }),
++    ], {
++      ...baseState,
++      anyArtists: ["Petchu", "Kwenda Lima"],
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual([
++      "kwenda",
++      "petchu",
++    ]);
++  });
++
++  it("requires at least one positive feeling", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("none", { feeling: [] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, tarraxa: 1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++
++  it("rejects matching negative feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("semba", { feeling: ["semba"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["semba"]);
++  });
++
++  it("requires positive match and no negative match for mixed feelings", () => {
++    const results = querySearch([
++      step("urban", { feeling: ["urban"] }),
++      step("mixed", { feeling: ["urban", "semba"] }),
++      step("semba", { feeling: ["semba"] }),
++    ], {
++      ...baseState,
++      feeling: { urban: 1, semba: -1 },
++    });
++
++    expect(results.map((result) => result.step._id)).toEqual(["urban"]);
++  });
++});
++
++describe("scoreSearchResult", () => {
++  it("adds text, included tag, and positive feeling score", () => {
++    const result = querySearch([
++      step("scored", {
++        name: "Shadow turn",
++        tags: ["turn"],
++        smartTags: ["Shadow position"],
++        feeling: ["urban"],
++      }),
++    ], {
++      ...baseState,
++      query: "shadow",
++      includeAllTags: ["turn", "Shadow position"],
++      feeling: { urban: 1, semba: 1 },
++      sort: { type: "SCORE", direction: "DESCENDING" },
++    })[0];
++
++    expect(result).toBeDefined();
++    expect(scoreSearchResult(result)).toBe(260);
++  });
++});
++
++describe("sortSearchResults", () => {
++  const results = [
++    {
++      step: step("a", {
++        createdAt: 10,
++        updatedAt: 90,
++        viewRecords: [100, 40],
++        practiceRecords: [{ date: 50, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 10,
++    },
++    {
++      step: step("b", {
++        createdAt: 20,
++        updatedAt: 80,
++        viewRecords: [200],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 30,
++    },
++    {
++      step: step("c", {
++        createdAt: 30,
++        updatedAt: 70,
++        viewRecords: [100, 60, 20],
++        practiceRecords: [{ date: 70, startOfDay: 0 }],
++      }),
++      fuzzyScore: 0,
++      score: 20,
++    },
++  ];
++
++  it.each([
++    ["SCORE", "DESCENDING", ["b", "c", "a"]],
++    ["SCORE", "ASCENDING", ["a", "c", "b"]],
++    ["ADDED_DATE", "DESCENDING", ["c", "b", "a"]],
++    ["ADDED_DATE", "ASCENDING", ["a", "b", "c"]],
++    ["VIEW_COUNT", "DESCENDING", ["c", "a", "b"]],
++    ["VIEW_DATE", "DESCENDING", ["b", "c", "a"]],
++    ["PRACTICE_DATE", "DESCENDING", ["c", "b", "a"]],
++  ] as const)(
++    "sorts by %s %s",
++    (type, direction, expected) => {
++      expect(
++        sortSearchResults(results, { type, direction }).map(
++          (result) => result.step._id,
++        ),
++      ).toEqual(expected);
++    },
++  );
++
++  it("uses reverse updatedAt direction for secondary ordering", () => {
++    expect(
++      sortSearchResults(
++        [
++          { step: step("older-update", { updatedAt: 10 }), score: 0 },
++          { step: step("newer-update", { updatedAt: 20 }), score: 0 },
++        ],
++        { type: "VIEW_COUNT", direction: "DESCENDING" },
++      ).map((result) => result.step._id),
++    ).toEqual(["older-update", "newer-update"]);
++  });
++
++  it("shuffles random order using the supplied random function", () => {
++    expect(
++      sortSearchResults(
++        results,
++        { type: "RANDOM", direction: "DESCENDING" },
++        { random: () => 0 },
++      ).map((result) => result.step._id),
++    ).toEqual(["b", "c", "a"]);
++  });
++});
+

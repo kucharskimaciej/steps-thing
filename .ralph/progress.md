@@ -349,3 +349,41 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-20
   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
 ---
+
+## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
+Thread:
+Run: 20260507-215557-6595 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 4a4788d feat(search): add feed search helpers
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
+  - .ralph/.tmp/story-20260507-215557-6595-1.json
+  - .ralph/.tmp/story-20260507-215557-6595-1.md
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-1.log
+  - lib/search/filter-steps.ts
+  - lib/search/query-search.ts
+  - lib/search/score-result.ts
+  - lib/search/sort-results.ts
+  - lib/search/types.ts
+  - tests/search/search-helpers.test.ts
+- What was implemented
+  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
+  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
+  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
+---
