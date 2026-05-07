@@ -256,7 +256,7 @@
     {
       "id": "S05-02-build-search-overlay-ui",
       "title": "Build Search Overlay UI",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S05-01-implement-search-filters-scoring-and-sorting"
       ],
@@ -264,7 +264,10 @@
       "acceptanceCriteria": [
         "Search UI can express every search state.",
         "Feed reacts immediately enough without excessive re-rendering."
-      ]
+      ],
+      "startedAt": "2026-05-07T20:02:33.197130+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-07T20:02:33.197415+00:00"
     },
     {
       "id": "S05-03-build-virtualized-feed-and-step-actions",

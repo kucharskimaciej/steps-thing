@@ -84,3 +84,7 @@
 [2026-05-07 22:00:22] Completed security performance regression review for S05-01
 [2026-05-07 22:01:11] Updated progress log for S05-01 search filters scoring sorting
 [2026-05-07 22:02:27] ITERATION 1 end (duration=390s)
+[2026-05-07 22:02:33] ITERATION 2 start (mode=build story=S05-02-build-search-overlay-ui)
+[2026-05-07 22:05:49] Implemented search overlay components and feed wiring
+[2026-05-07 22:09:13] Verification passed: pnpm typecheck, pnpm lint, pnpm test -- --run, pnpm build; browser reached auth gate for /feed
+[2026-05-07 22:09:45] Completed security performance regression review for S05-02
