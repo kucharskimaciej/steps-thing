@@ -25,11 +25,23 @@ for ((iteration = 1; iteration <= TASK_LIMIT; iteration++)); do
     exit 0
   fi
 
+  TODO_BEFORE="$(grep -F -- "- [ ]" "$WORKTREE_DIR/TODO.md" | wc -l | tr -d " ")"
+
   echo "Starting Ralph iteration $iteration/$TASK_LIMIT."
-  codex exec --full-auto --cd "$WORKTREE_DIR" "$(cat "$WORKTREE_DIR/tasks/RALPH_PROMPT.md")"
+  if ! codex exec --full-auto --cd "$WORKTREE_DIR" "$(cat "$WORKTREE_DIR/tasks/RALPH_PROMPT.md")"; then
+    echo "Codex failed. Worktree kept at: $WORKTREE_DIR" >&2
+    exit 1
+  fi
 
   if git -C "$WORKTREE_DIR" diff --quiet && git -C "$WORKTREE_DIR" diff --cached --quiet; then
     echo "Ralph produced no changes; stopping."
+    exit 1
+  fi
+
+  TODO_AFTER="$(grep -F -- "- [ ]" "$WORKTREE_DIR/TODO.md" | wc -l | tr -d " ")"
+  if ((TODO_AFTER >= TODO_BEFORE)); then
+    echo "Ralph changed files but did not complete a TODO task; stopping without commit or PR." >&2
+    echo "Worktree kept at: $WORKTREE_DIR" >&2
     exit 1
   fi
 
