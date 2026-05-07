@@ -6,6 +6,44 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 21:37:30 +0200] - S04-04-implement-inline-edit-modal: Implement Inline Edit Modal
+Thread:
+Run: 20260507-205447-62953 (iteration 4)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-4.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-4.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: b39117d feat(steps): add inline edit modal
+- Post-commit status: `clean after progress commit`
+- Verification:
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route reached Clerk signed-out boundary; in-app browser Node REPL tool unavailable for authed modal interaction, covered by component tests
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/.tmp/prompt-20260507-205447-62953-4.md
+  - .ralph/.tmp/story-20260507-205447-62953-4.json
+  - .ralph/.tmp/story-20260507-205447-62953-4.md
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-205447-62953-iter-4.log
+  - .ralph/runs/run-20260507-205447-62953-iter-4.md
+  - app/(authenticated)/feed/page.tsx
+  - components/steps/feed-step-list.tsx
+  - components/steps/inline-step-edit-modal.tsx
+  - components/steps/use-inline-step-edit.tsx
+  - tests/components/inline-step-edit-modal.test.tsx
+- What was implemented
+  Feed now renders an owner-scoped step list with inline edit actions. The inline edit modal loads the owned step, reuses the shared step form, shows top-20 similarity-ranked variation candidates excluding the edited step, supports variation group toggles, saves via `updateStep`, and closes only after success. Cancel, backdrop close, close button, and Escape leave data unchanged.
+- **Learnings for future iterations:**
+  - Patterns discovered: create/edit ranking logic can be reused safely in a modal when query execution is skipped while closed.
+  - Gotchas encountered: authenticated `/feed` blocks direct browser interaction without a signed-in browser; keep component tests at Convex boundaries for modal behavior.
+  - Useful context: `updateStep` already generates the fresh persisted `variationKey`, so the modal passes selected merge keys just like the full edit page.
+---
+
 ## [2026-05-07 21:28:25 CEST] - S04-03-implement-edit-step-page: Implement Edit Step Page
 Thread:
 Run: 20260507-205447-62953 (iteration 3)
