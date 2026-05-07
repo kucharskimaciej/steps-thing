@@ -120,7 +120,7 @@
     {
       "id": "S03-01-implement-video-hashing-upload-and-duplicate-detection",
       "title": "Implement Video Hashing, Upload, And Duplicate Detection",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S02-04-create-migration-and-backfill-tooling"
       ],
@@ -132,8 +132,8 @@
         "Signed URL generation verifies authenticated ownership."
       ],
       "startedAt": "2026-05-07T18:02:53.350050+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T18:02:53.350204+00:00"
+      "completedAt": "2026-05-07T18:17:40.809560+00:00",
+      "updatedAt": "2026-05-07T18:17:40.809356+00:00"
     },
     {
       "id": "S03-02-implement-video-processing-pipeline",
