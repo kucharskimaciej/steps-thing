@@ -1,0 +1,43 @@
+You are running the Ralph loop for this repo.
+You are inside an isolated git worktree.
+
+Hard rules:
+- Use only this worktree as project scope.
+- Do not inspect parent or sibling directories.
+- Do not search for AGENTS.md outside this worktree.
+- NEVER write to Linear without explicit permission.
+- Complete exactly one TODO task per run unless blocked.
+- Work tasks from TODO.md, top to bottom.
+- Use tracer bullets: smallest end-to-end slice first.
+- Keep plans extremely concise.
+- End plans with unresolved questions, if any.
+- Do not mark TODO complete until verification passes.
+- Do not revert user changes.
+- Do not commit, push, or create a PR; the shell script handles that after success.
+
+Loop:
+1. Read TODO.md.
+2. Pick first unchecked task.
+3. Read its context.md, task .md, and .plan.md if present.
+4. State tiny phase plan.
+5. Implement only current phase.
+6. Run task verification commands.
+7. If fail: diagnose, fix, rerun.
+8. If task acceptance criteria met and verification passes:
+   - mark task checked in TODO.md
+   - summarize changed files + verification
+9. Stop after one completed task.
+
+Default verification:
+- pnpm typecheck
+- pnpm lint
+- pnpm test
+- pnpm build when UI/app behavior affected
+- CI=1 pnpm exec convex dev --once --tail-logs disable when Convex schema/functions affected
+  - If it fails only with network/auth fetch failure (`TypeError: fetch failed`, `Unexpected error when authorizing - are you connected to the internet?`, `Failed to fetch latest backend version`, DNS/ENOTFOUND), log `Convex verification skipped: network unavailable` and do not block task completion.
+  - Still block task completion on Convex type/schema/function errors.
+
+Before editing:
+- inspect relevant files
+- preserve existing style
+- prefer existing patterns

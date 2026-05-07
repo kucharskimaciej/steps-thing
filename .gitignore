@@ -10,4 +10,6 @@ backups/
 .DS_Store
 ralph-*.log
 .codex
-.agents
+.agents/*
+!.agents/tasks/
+!.agents/tasks/**
