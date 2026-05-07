@@ -427,3 +427,39 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-21
   - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
   - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
 ---
+
+## [2026-05-07 22:23:20 CEST] - S05-03-build-virtualized-feed-and-step-actions: Build Virtualized Feed And Step Actions
+Thread:
+Run: 20260507-215557-6595 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 0c6a6e7 feat(feed): add virtualized step feed
+- Post-commit status: `.ralph/runs/run-20260507-215557-6595-iter-3.log` modified by active run logging before progress commit
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; feed workflow verified by component tests
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - components/feed/feed-step-card.tsx
+  - components/feed/options-menu.tsx
+  - components/feed/step-actions.tsx
+  - components/feed/steps-feed.tsx
+  - components/steps/feed-step-list.tsx
+  - components/steps/step-tags.tsx
+  - components/steps/variation-feed-modal.tsx
+  - tests/components/feed.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-3.log
+- What was implemented
+  Main `/feed` now queries owned steps through the existing wrapper, applies search/filter/sort, renders a virtualized card feed, sizes primary videos from stored dimensions with a `60vh` cap, mounts visible videos only, displays tags, variation counts, practice action, options menu, copy link, and inline edit entry. Variation overlay shows same-key related steps only.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep `FeedStepList` as the Convex/auth wrapper and put testable feed behavior in `components/feed/steps-feed.tsx`.
+  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
+  - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
+---
