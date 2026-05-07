@@ -190,7 +190,7 @@
     {
       "id": "S04-02-implement-create-step-page",
       "title": "Implement Create Step Page",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S04-01-build-step-form-validation-and-smart-tags"
       ],
@@ -201,8 +201,8 @@
         "Variation group selection is clear."
       ],
       "startedAt": "2026-05-07T19:07:34.867512+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-07T19:07:34.867712+00:00"
+      "completedAt": "2026-05-07T19:18:37.828078+00:00",
+      "updatedAt": "2026-05-07T19:18:37.827898+00:00"
     },
     {
       "id": "S04-03-implement-edit-step-page",

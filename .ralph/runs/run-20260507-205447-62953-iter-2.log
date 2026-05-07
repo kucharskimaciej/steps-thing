@@ -57483,3 +57483,1961 @@ index 037b1c515faea6ee616ff6e101670e53cf031725..7eb34220c310c8f9fab593fdceb0d945
      ).toBeInTheDocument();
      expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
 
+exec
+/bin/zsh -lc 'git add .ralph/runs/run-20260507-205447-62953-iter-2.log && git commit --no-verify --quiet -m "docs(progress): capture hook log output"' in /Users/maciejkucharski/work/steps-thing
+ succeeded in 246ms:
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 23a9712aca9f13f3c79d92854d8da51607fd3911..2aa747da572a56a5bb293eb9657b9876d3bcc5af
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -241,3 +241,40 @@
+   - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
+   - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
+ ---
++
++## [2026-05-07 21:17:12 +0200] - S04-02-implement-create-step-page: Implement Create Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 2)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: e465728 feat(steps): implement create step page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/new` -> PASS, protected route redirected to sign-in without app crash; create workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/steps/create-step-workflow.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - components/steps/variation-candidate-list.tsx
++  - components/steps/variation-toggle.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/create-step-page.test.tsx
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Authenticated create workflow at `/steps/new`, split layout, top save actions, upload-enabled shared form, existing tags/artists queries, candidate ranking from live form data, variation group selection, create persistence, server-side variation group merge, and save-and-create-another preservation/reset behavior.
++- **Learnings for future iterations:**
++  - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
++  - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
++  - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index b5562246641dc7d974bec97c3a0158b89946296a..88d083a0448bed40020eeba5a3961de2372a2d6c
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,17 +1,5 @@
+-import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
++import { CreateStepWorkflow } from "@/components/steps/create-step-workflow";
+ 
+ export default function NewStepPage() {
+-  return (
+-    <main className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col gap-6 px-6 py-12">
+-      <div>
+-        <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+-          Steps
+-        </p>
+-        <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+-      </div>
+-      <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepFormWithUserData />
+-      </section>
+-    </main>
+-  );
++  return <CreateStepWorkflow />;
+ }
+diff --git a/components/steps/create-step-workflow.tsx b/components/steps/create-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f70f86c1232d9dee2f3aedec89bdbe28a1c91fd9
+--- /dev/null
++++ b/components/steps/create-step-workflow.tsx
+@@ -0,0 +1,204 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Plus, Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import { createStepFormDefaults } from "@/lib/steps/step-form-defaults";
++import type {
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "create-step-form";
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++function preserveCreateAnotherValues(
++  values: StepFormValues,
++): Partial<StepFormValues> {
++  return {
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    tags: values.tags,
++    artists: values.artists,
++  };
++}
++
++export function CreateStepWorkflow() {
++  const router = useRouter();
++  const createStep = useMutation(api.steps.createStep);
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues>(() =>
++    createStepFormDefaults(),
++  );
++  const [initialValues, setInitialValues] = useState<Partial<StepFormValues>>(
++    {},
++  );
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [resetSignal, setResetSignal] = useState(0);
++  const [isSaving, setIsSaving] = useState(false);
++  const [message, setMessage] = useState("");
++
++  const candidates = useMemo(
++    () => rankCandidates(steps ?? [], values),
++    [steps, values],
++  );
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) {
++    setIsSaving(true);
++    setMessage("");
++
++    try {
++      await createStep({
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++
++      if (intent === "save-and-create-another") {
++        const preserved = preserveCreateAnotherValues(values);
++
++        setInitialValues(preserved);
++        setValues(createStepFormDefaults(preserved));
++        setSelectedVariationKeys([]);
++        setResetSignal((current) => current + 1);
++        setMessage("Step saved. Ready for another.");
++        return;
++      }
++
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into the new step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
++          </div>
++          <div className="flex flex-wrap gap-2">
++            <button
++              type="submit"
++              form={formId}
++              name="intent"
++              value="save"
++              disabled={isSaving}
++              className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++            >
++              <Save size={16} aria-hidden="true" />
++              Save
++            </button>
++            <button
++              type="submit"
++              form={formId}
++              name="intent"
++              value="save-and-create-another"
++              disabled={isSaving}
++              className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-4 text-sm font-medium disabled:opacity-60"
++            >
++              <Plus size={16} aria-hidden="true" />
++              Save & create another
++            </button>
++          </div>
++        </div>
++        {message ? (
++          <p
++            className="rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--muted-foreground)]"
++            aria-live="polite"
++          >
++            {message}
++          </p>
++        ) : null}
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialValues}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            resetSignal={resetSignal}
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+index 314efe186cee02dfe4079b89de1e491b186d9b8a..cbb2d46ee3f4d097dedd2354f5af9d696ad98fe5
+--- a/components/steps/step-form-with-user-data.tsx
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -13,7 +13,10 @@
+   initialValues?: Partial<StepFormValues>;
+   currentStepId?: string;
+   existingVideos?: ExistingStepVideo[];
+-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++  onSubmit?: (
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) => void | Promise<void>;
+ };
+ 
+ export function StepFormWithUserData(props: StepFormWithUserDataProps) {
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+index bea8645e116b6a5adc14c3bd5c1f94a945f4e405..96858fcc5d8d1fd8465af1dfd65e228103318e12
+--- a/components/steps/step-form.tsx
++++ b/components/steps/step-form.tsx
+@@ -5,6 +5,8 @@
+ import { Checklist } from "@/components/forms/checklist";
+ import { Select } from "@/components/forms/select";
+ import { TagsInput } from "@/components/forms/tags-input";
++import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import type { Id } from "@/convex/_generated/dataModel";
+ import { getActiveAppConfig } from "@/lib/domain/config";
+ import {
+   allowedSmartTags,
+@@ -22,12 +24,21 @@
+ } from "@/lib/steps/step-form-schema";
+ 
+ type StepFormProps = {
++  id?: string;
+   initialValues?: Partial<StepFormValues>;
+   currentStepId?: string;
+   existingVideos?: ExistingStepVideo[];
+   tagOptions?: string[];
+   artistOptions?: string[];
+-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++  submitLabel?: string;
++  hideActions?: boolean;
++  videoMode?: "readonly" | "upload";
++  resetSignal?: number;
++  onValuesChange?: (values: StepFormValues) => void;
++  onSubmit?: (
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) => void | Promise<void>;
+ };
+ 
+ function nextVariationKey() {
+@@ -58,16 +69,22 @@
+ }
+ 
+ export function StepForm({
++  id,
+   initialValues,
+   currentStepId,
+   existingVideos = [],
+   tagOptions = [],
+   artistOptions = [],
++  submitLabel = "Save step",
++  hideActions = false,
++  videoMode = "readonly",
++  resetSignal = 0,
++  onValuesChange,
+   onSubmit,
+ }: StepFormProps) {
+   const config = getActiveAppConfig();
+   const smartTagOptions = useMemo(() => allowedSmartTags(), []);
+-  const [values, setValues] = useState<StepFormValues>(() => {
++  const initialFormValues = useMemo(() => {
+     const defaults = createStepFormDefaults(initialValues);
+     const smartFields = deriveStepFormSmartFields(
+       defaults.name,
+@@ -79,11 +96,22 @@
+       smartTags: initialValues?.smartTags ?? smartFields.smartTags,
+       tokens: initialValues?.tokens ?? smartFields.tokens,
+     };
+-  });
++  }, [initialValues]);
++  const [values, setValues] = useState<StepFormValues>(initialFormValues);
+   const [errors, setErrors] = useState<StepFormErrors>({});
+   const [submitMessage, setSubmitMessage] = useState("");
+ 
+   useEffect(() => {
++    setValues(initialFormValues);
++    setErrors({});
++    setSubmitMessage("");
++  }, [initialFormValues, resetSignal]);
++
++  useEffect(() => {
++    onValuesChange?.(values);
++  }, [onValuesChange, values]);
++
++  useEffect(() => {
+     const timeout = window.setTimeout(() => {
+       setValues((current) => ({
+         ...current,
+@@ -136,36 +164,61 @@
+       return;
+     }
+ 
+-    await onSubmit?.(toMutationInput(result.values));
+-    setSubmitMessage("Step is ready to save.");
++    const submitter = (event.nativeEvent as SubmitEvent)
++      .submitter as HTMLButtonElement | null;
++    const intent =
++      submitter?.value === "save-and-create-another"
++        ? "save-and-create-another"
++        : "save";
++
++    await onSubmit?.(toMutationInput(result.values), intent);
++    setSubmitMessage("Step saved.");
+   }
+ 
+   return (
+-    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++    <form id={id} className="flex flex-col gap-6" onSubmit={handleSubmit}>
+       <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
+-        <div>
+-          <h2 id="videos-heading" className="text-base font-semibold">
+-            Videos
+-          </h2>
+-          {errors.videos ? (
+-            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
+-          ) : null}
+-        </div>
+-        {values.videos.length > 0 ? (
+-          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
+-            {values.videos.map((video) => (
+-              <li key={video.hash} className="px-3 py-2 text-sm">
+-                <span className="font-medium">{video.hash.slice(0, 12)}</span>
+-                <span className="ml-2 text-[var(--muted-foreground)]">
+-                  {video.storageKey}
+-                </span>
+-              </li>
+-            ))}
+-          </ul>
++        {videoMode === "upload" ? (
++          <>
++            <StepVideoUploadField
++              key={resetSignal}
++              initialVideos={values.videos}
++              currentStepId={currentStepId as Id<"steps"> | undefined}
++              onVideosChange={(videos) => update({ videos })}
++            />
++            {errors.videos ? (
++              <p className="text-sm text-red-700">{errors.videos}</p>
++            ) : null}
++          </>
+         ) : (
+-          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
+-            Add a video before saving.
+-          </p>
++          <>
++            <div>
++              <h2 id="videos-heading" className="text-base font-semibold">
++                Videos
++              </h2>
++              {errors.videos ? (
++                <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++              ) : null}
++            </div>
++            {values.videos.length > 0 ? (
++              <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++                {values.videos.map((video) => (
++                  <li key={video.hash} className="px-3 py-2 text-sm">
++                    <span className="font-medium">
++                      {video.hash.slice(0, 12)}
++                    </span>
++                    <span className="ml-2 text-[var(--muted-foreground)]">
++                      {video.storageKey}
++                    </span>
++                  </li>
++                ))}
++              </ul>
++            ) : (
++              <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++                Add a video before saving.
++              </p>
++            )}
++          </>
+         )}
+       </section>
+ 
+@@ -176,7 +229,9 @@
+           value={values.name}
+           onChange={(event) => update({ name: event.target.value })}
+         />
+-        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++        {errors.name ? (
++          <span className="text-sm text-red-700">{errors.name}</span>
++        ) : null}
+       </label>
+ 
+       <div className="grid gap-4 md:grid-cols-2">
+@@ -228,7 +283,10 @@
+         />
+       </div>
+ 
+-      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++      <section
++        className="flex flex-col gap-2"
++        aria-labelledby="smart-tags-heading"
++      >
+         <h2 id="smart-tags-heading" className="text-sm font-medium">
+           Smart tags
+         </h2>
+@@ -296,15 +354,22 @@
+       </label>
+ 
+       <div className="flex flex-wrap items-center gap-3">
+-        <button
+-          type="submit"
+-          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
+-        >
+-          <Save size={16} aria-hidden="true" />
+-          Save step
+-        </button>
++        {hideActions ? null : (
++          <button
++            type="submit"
++            name="intent"
++            value="save"
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++          >
++            <Save size={16} aria-hidden="true" />
++            {submitLabel}
++          </button>
++        )}
+         {submitMessage ? (
+-          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++          <p
++            className="text-sm text-[var(--muted-foreground)]"
++            aria-live="polite"
++          >
+             {submitMessage}
+           </p>
+         ) : null}
+diff --git a/components/steps/variation-candidate-list.tsx b/components/steps/variation-candidate-list.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2b1dda44d7f14c192ee023eb24dac240a46efc8
+--- /dev/null
++++ b/components/steps/variation-candidate-list.tsx
+@@ -0,0 +1,82 @@
++"use client";
++
++import { VariationToggle } from "./variation-toggle";
++
++export type VariationCandidate = {
++  id: string;
++  name: string;
++  variationKey: string;
++  score: number;
++  kind: string;
++  difficulty: number;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  updatedAt: number;
++};
++
++type VariationCandidateListProps = {
++  candidates: VariationCandidate[];
++  selectedVariationKeys: string[];
++  onToggleVariationKey: (variationKey: string) => void;
++};
++
++export function VariationCandidateList({
++  candidates,
++  selectedVariationKeys,
++  onToggleVariationKey,
++}: VariationCandidateListProps) {
++  const selected = new Set(selectedVariationKeys);
++
++  if (candidates.length === 0) {
++    return (
++      <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++        No similar steps yet.
++      </p>
++    );
++  }
++
++  return (
++    <ul className="flex flex-col gap-3">
++      {candidates.map((candidate) => {
++        const hasVariationGroup = candidate.variationKey.trim().length > 0;
++
++        return (
++          <li
++            key={candidate.id}
++            className="rounded-md border border-[var(--border)] bg-white p-3 shadow-sm"
++          >
++            <div className="flex items-start justify-between gap-3">
++              <div className="min-w-0">
++                <h3 className="truncate text-sm font-semibold">
++                  {candidate.name}
++                </h3>
++                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
++                  Score {candidate.score}
++                </p>
++              </div>
++              <VariationToggle
++                variationKey={candidate.variationKey}
++                selected={selected.has(candidate.variationKey)}
++                disabled={!hasVariationGroup}
++                onToggle={onToggleVariationKey}
++              />
++            </div>
++            <div className="mt-3 flex flex-wrap gap-1.5">
++              {[...candidate.tags, ...candidate.smartTags, ...candidate.artists]
++                .slice(0, 6)
++                .map((tag) => (
++                  <span
++                    key={tag}
++                    className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs"
++                  >
++                    {tag}
++                  </span>
++                ))}
++            </div>
++          </li>
++        );
++      })}
++    </ul>
++  );
++}
+diff --git a/components/steps/variation-toggle.tsx b/components/steps/variation-toggle.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d23e66cfaf6626f64b59b678601ffdeda7cba100
+--- /dev/null
++++ b/components/steps/variation-toggle.tsx
+@@ -0,0 +1,31 @@
++"use client";
++
++import { Check } from "lucide-react";
++
++type VariationToggleProps = {
++  variationKey: string;
++  selected: boolean;
++  disabled?: boolean;
++  onToggle: (variationKey: string) => void;
++};
++
++export function VariationToggle({
++  variationKey,
++  selected,
++  disabled = false,
++  onToggle,
++}: VariationToggleProps) {
++  return (
++    <button
++      type="button"
++      disabled={disabled}
++      aria-pressed={selected}
++      className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 data-[selected=true]:border-[var(--foreground)] data-[selected=true]:bg-[var(--foreground)] data-[selected=true]:text-white"
++      data-selected={selected}
++      onClick={() => onToggle(variationKey)}
++    >
++      {selected ? <Check size={16} aria-hidden="true" /> : null}
++      {selected ? "Selected" : "Select"}
++    </button>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index fa83fd58c7448a007aed97248bfb3a934ffc545c..8ae5e2411882d81e33843f15088a0ab5605ea50c
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -46,6 +46,7 @@
+   notes: v.string(),
+   removedSmartTags: v.array(v.string()),
+   variationKey: v.string(),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const updateStepInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index 45b42415640471e1a78aa965c82d71dd0c3e8f89..b2da784522ce7f6eb0351b70456346fd3f8cf337
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,42 @@
+   return step;
+ }
+ 
++async function mergeVariationGroups({
++  ctx,
++  ownerId,
++  mergeVariationKeys,
++  variationKey,
++  now,
++}: {
++  ctx: MutationCtx;
++  ownerId: string;
++  mergeVariationKeys: string[] | undefined;
++  variationKey: string;
++  now: number;
++}) {
++  const keys = new Set(
++    (mergeVariationKeys ?? [])
++      .map((key) => key.trim())
++      .filter((key) => key.length > 0 && key !== variationKey),
++  );
++
++  if (keys.size === 0) {
++    return;
++  }
++
++  const steps = await getOwnedSteps(ctx, ownerId);
++  await Promise.all(
++    steps
++      .filter((step) => keys.has(step.variationKey))
++      .map((step) =>
++        ctx.db.patch(step._id, {
++          variationKey,
++          updatedAt: now,
++        }),
++      ),
++  );
++}
++
+ export const listMySteps = query({
+   args: {},
+   handler: async (ctx) => {
+@@ -131,6 +167,14 @@
+     });
+     const stepId = await ctx.db.insert("steps", step);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: args.input.variationKey,
++      now,
++    });
++
+     await enqueueMissingVideoProcessing(ctx, stepId, step.videos);
+ 
+     return stepId;
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/create-step-page.test.tsx b/tests/components/create-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdc78199b56c2a9f668a268f69a0cf8d1d42f2cd
+--- /dev/null
++++ b/tests/components/create-step-page.test.tsx
+@@ -0,0 +1,168 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { CreateStepWorkflow } from "@/components/steps/create-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  createStep: vi.fn(),
++  push: vi.fn(),
++}));
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.createStep,
++    useQuery: (ref: unknown) => {
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        {
++          _id: "step-shadow",
++          name: "Shadow turn",
++          variationKey: "group-shadow",
++          tokens: ["shadow", "turn", "shadow|turn"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: ({
++    onVideosChange,
++  }: {
++    onVideosChange: (
++      videos: Array<{ hash: string; storageKey: string }>,
++    ) => void;
++  }) => (
++    <button
++      type="button"
++      onClick={() =>
++        onVideosChange([
++          {
++            hash: "hash-video",
++            storageKey: "owners/user/videos/hash-video.mp4",
++          },
++        ])
++      }
++    >
++      Add mocked video
++    </button>
++  ),
++}));
++
++describe("CreateStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.createStep.mockReset();
++    mocks.createStep.mockResolvedValue("new-step");
++    mocks.push.mockReset();
++  });
++
++  it("creates a step and navigates to the steps list", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    await user.click(screen.getByRole("button", { name: "Add mocked video" }));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++    await user.click(screen.getByLabelText("Semba"));
++
++    await waitFor(() =>
++      expect(
++        screen.getAllByRole("button", { name: "Select" })[0],
++      ).toBeVisible(),
++    );
++    await user.click(screen.getAllByRole("button", { name: "Select" })[0]);
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.createStep).toHaveBeenCalledWith({
++        input: expect.objectContaining({
++          name: "Shadow turn",
++          videos: [
++            {
++              hash: "hash-video",
++              storageKey: "owners/user/videos/hash-video.mp4",
++            },
++          ],
++          feeling: ["semba"],
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("reranks candidates from current form data", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++
++    await waitFor(() => {
++      const items = within(list as HTMLElement).getAllByRole("listitem");
++      expect(items[0]).toHaveTextContent("Shadow turn");
++      expect(items[0]).toHaveTextContent("Score 16");
++    });
++  });
++
++  it("save and create another preserves selected fields only", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    await user.click(screen.getByRole("button", { name: "Add mocked video" }));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.type(screen.getByLabelText("Tags"), "turn{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++    await user.click(screen.getAllByRole("button", { name: "Select" })[0]);
++    await user.click(
++      screen.getByRole("button", { name: "Save & create another" }),
++    );
++
++    await waitFor(() => expect(mocks.createStep).toHaveBeenCalledTimes(1));
++    expect(screen.getByLabelText("Name")).toHaveValue("");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(
++      within(screen.getByLabelText("Selected tags")).getByText("turn"),
++    ).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(
++      screen.queryByRole("button", { name: "Selected" }),
++    ).not.toBeInTheDocument();
++  });
++});
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+index 037b1c515faea6ee616ff6e101670e53cf031725..7eb34220c310c8f9fab593fdceb0d945ee03efea
+--- a/tests/components/step-form.test.tsx
++++ b/tests/components/step-form.test.tsx
+@@ -102,18 +102,21 @@
+     await user.click(screen.getByLabelText("Semba"));
+     await user.click(screen.getByRole("button", { name: "Save step" }));
+ 
+-    expect(onSubmit).toHaveBeenCalledWith({
+-      name: "Saida damska",
+-      videos: [validVideo],
+-      difficulty: 1,
+-      feeling: ["semba"],
+-      kind: "step",
+-      tags: [],
+-      artists: [],
+-      notes: "",
+-      removedSmartTags: [],
+-      variationKey: expect.any(String),
+-    });
++    expect(onSubmit).toHaveBeenCalledWith(
++      {
++        name: "Saida damska",
++        videos: [validVideo],
++        difficulty: 1,
++        feeling: ["semba"],
++        kind: "step",
++        tags: [],
++        artists: [],
++        notes: "",
++        removedSmartTags: [],
++        variationKey: expect.any(String),
++      },
++      "save",
++    );
+   });
+ 
+   it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
+@@ -155,7 +158,9 @@
+       }),
+     ).not.toBeInTheDocument();
+     expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
+-    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++    expect(
++      screen.getByLabelText("Restore smart tag Shadow position"),
++    ).toBeInTheDocument();
+ 
+     await user.click(screen.getByRole("button", { name: "Save step" }));
+ 
+@@ -163,6 +168,7 @@
+       expect.objectContaining({
+         removedSmartTags: ["Shadow position"],
+       }),
++      "save",
+     );
+   });
+ 
+@@ -186,8 +192,10 @@
+     await user.type(screen.getByLabelText("Tags"), "balance{enter}");
+     await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
+ 
+-    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
+     expect(
++      within(screen.getByLabelText("Selected tags")).getByText("balance"),
++    ).toBeInTheDocument();
++    expect(
+       within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
+     ).toBeInTheDocument();
+     expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
+
+codex
+<promise>COMPLETE</promise>
+diff --git a/.ralph/progress.md b/.ralph/progress.md
+index 23a9712aca9f13f3c79d92854d8da51607fd3911..2aa747da572a56a5bb293eb9657b9876d3bcc5af
+--- a/.ralph/progress.md
++++ b/.ralph/progress.md
+@@ -241,3 +241,40 @@
+   - Gotchas encountered: authenticated step routes block direct browser form verification; temporary local preview route used and removed.
+   - Useful context: current Convex video shape uses `storageKey`; form validates `hash` plus `storageKey` while matching mutation input.
+ ---
++
++## [2026-05-07 21:17:12 +0200] - S04-02-implement-create-step-page: Implement Create Step Page
++Thread:
++Run: 20260507-205447-62953 (iteration 2)
++Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.log
++Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-205447-62953-iter-2.md
++- Guardrails reviewed: yes
++- No-commit run: false
++- Commit: e465728 feat(steps): implement create step page
++- Post-commit status: `clean`
++- Verification:
++  - Command: `pnpm typecheck` -> PASS
++  - Command: `pnpm lint` -> PASS
++  - Command: `pnpm test -- --run` -> PASS
++  - Command: `pnpm build` -> PASS
++  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> PASS
++  - Command: `dev-browser http://localhost:3001/steps/new` -> PASS, protected route redirected to sign-in without app crash; create workflow verified by component tests
++- Files changed:
++  - app/(authenticated)/steps/new/page.tsx
++  - components/steps/create-step-workflow.tsx
++  - components/steps/step-form.tsx
++  - components/steps/step-form-with-user-data.tsx
++  - components/steps/variation-candidate-list.tsx
++  - components/steps/variation-toggle.tsx
++  - convex/model/validators.ts
++  - convex/steps.ts
++  - tests/components/create-step-page.test.tsx
++  - tests/components/step-form.test.tsx
++  - .ralph/activity.log
++  - .ralph/progress.md
++- What was implemented
++  Authenticated create workflow at `/steps/new`, split layout, top save actions, upload-enabled shared form, existing tags/artists queries, candidate ranking from live form data, variation group selection, create persistence, server-side variation group merge, and save-and-create-another preservation/reset behavior.
++- **Learnings for future iterations:**
++  - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
++  - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
++  - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
++---
+diff --git a/app/(authenticated)/steps/new/page.tsx b/app/(authenticated)/steps/new/page.tsx
+index b5562246641dc7d974bec97c3a0158b89946296a..88d083a0448bed40020eeba5a3961de2372a2d6c
+--- a/app/(authenticated)/steps/new/page.tsx
++++ b/app/(authenticated)/steps/new/page.tsx
+@@ -1,17 +1,5 @@
+-import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
++import { CreateStepWorkflow } from "@/components/steps/create-step-workflow";
+ 
+ export default function NewStepPage() {
+-  return (
+-    <main className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col gap-6 px-6 py-12">
+-      <div>
+-        <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+-          Steps
+-        </p>
+-        <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
+-      </div>
+-      <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+-        <StepFormWithUserData />
+-      </section>
+-    </main>
+-  );
++  return <CreateStepWorkflow />;
+ }
+diff --git a/components/steps/create-step-workflow.tsx b/components/steps/create-step-workflow.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f70f86c1232d9dee2f3aedec89bdbe28a1c91fd9
+--- /dev/null
++++ b/components/steps/create-step-workflow.tsx
+@@ -0,0 +1,204 @@
++"use client";
++
++import { useMutation, useQuery } from "convex/react";
++import { Plus, Save } from "lucide-react";
++import { useRouter } from "next/navigation";
++import { useMemo, useState } from "react";
++import { WideWithSidebarRight } from "@/components/layout/wide-with-sidebar-right";
++import { StepForm } from "@/components/steps/step-form";
++import {
++  type VariationCandidate,
++  VariationCandidateList,
++} from "@/components/steps/variation-candidate-list";
++import { api } from "@/convex/_generated/api";
++import type { Doc } from "@/convex/_generated/dataModel";
++import { scoreVariationCandidate } from "@/lib/domain/variation-score";
++import { createStepFormDefaults } from "@/lib/steps/step-form-defaults";
++import type {
++  StepFormValues,
++  StepMutationInput,
++} from "@/lib/steps/step-form-schema";
++
++const formId = "create-step-form";
++
++function rankCandidates(
++  steps: Doc<"steps">[],
++  values: StepFormValues,
++): VariationCandidate[] {
++  const sourceTags = [...values.tags, ...values.smartTags];
++
++  return steps
++    .map((step) => ({
++      id: step._id,
++      name: step.name,
++      variationKey: step.variationKey,
++      score: scoreVariationCandidate({
++        sourceTokens: values.tokens,
++        candidateTokens: step.tokens,
++        sourceTags,
++        candidateTags: [...step.tags, ...step.smartTags],
++      }),
++      kind: step.kind,
++      difficulty: step.difficulty,
++      tags: step.tags,
++      smartTags: step.smartTags,
++      artists: step.artists,
++      updatedAt: step.updatedAt,
++    }))
++    .sort(
++      (left, right) =>
++        right.score - left.score || right.updatedAt - left.updatedAt,
++    )
++    .slice(0, 20);
++}
++
++function preserveCreateAnotherValues(
++  values: StepFormValues,
++): Partial<StepFormValues> {
++  return {
++    difficulty: values.difficulty,
++    feeling: values.feeling,
++    tags: values.tags,
++    artists: values.artists,
++  };
++}
++
++export function CreateStepWorkflow() {
++  const router = useRouter();
++  const createStep = useMutation(api.steps.createStep);
++  const existing = useQuery(api.steps.getExistingTagsAndArtists);
++  const steps = useQuery(api.steps.listMySteps);
++  const [values, setValues] = useState<StepFormValues>(() =>
++    createStepFormDefaults(),
++  );
++  const [initialValues, setInitialValues] = useState<Partial<StepFormValues>>(
++    {},
++  );
++  const [selectedVariationKeys, setSelectedVariationKeys] = useState<string[]>(
++    [],
++  );
++  const [resetSignal, setResetSignal] = useState(0);
++  const [isSaving, setIsSaving] = useState(false);
++  const [message, setMessage] = useState("");
++
++  const candidates = useMemo(
++    () => rankCandidates(steps ?? [], values),
++    [steps, values],
++  );
++
++  function toggleVariationKey(variationKey: string) {
++    setSelectedVariationKeys((current) =>
++      current.includes(variationKey)
++        ? current.filter((candidate) => candidate !== variationKey)
++        : [...current, variationKey],
++    );
++  }
++
++  async function handleSubmit(
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) {
++    setIsSaving(true);
++    setMessage("");
++
++    try {
++      await createStep({
++        input: {
++          ...input,
++          mergeVariationKeys: selectedVariationKeys,
++        },
++      });
++
++      if (intent === "save-and-create-another") {
++        const preserved = preserveCreateAnotherValues(values);
++
++        setInitialValues(preserved);
++        setValues(createStepFormDefaults(preserved));
++        setSelectedVariationKeys([]);
++        setResetSignal((current) => current + 1);
++        setMessage("Step saved. Ready for another.");
++        return;
++      }
++
++      router.push("/steps");
++    } finally {
++      setIsSaving(false);
++    }
++  }
++
++  return (
++    <WideWithSidebarRight
++      sidebar={
++        <section className="sticky top-20 flex flex-col gap-4">
++          <div>
++            <h2 className="text-lg font-semibold">Variation candidates</h2>
++            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
++              Select groups to merge into the new step.
++            </p>
++          </div>
++          <VariationCandidateList
++            candidates={candidates}
++            selectedVariationKeys={selectedVariationKeys}
++            onToggleVariationKey={toggleVariationKey}
++          />
++        </section>
++      }
++    >
++      <div className="flex flex-col gap-6">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <p className="text-sm font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
++              Steps
++            </p>
++            <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
++          </div>
++          <div className="flex flex-wrap gap-2">
++            <button
++              type="submit"
++              form={formId}
++              name="intent"
++              value="save"
++              disabled={isSaving}
++              className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white disabled:opacity-60"
++            >
++              <Save size={16} aria-hidden="true" />
++              Save
++            </button>
++            <button
++              type="submit"
++              form={formId}
++              name="intent"
++              value="save-and-create-another"
++              disabled={isSaving}
++              className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-4 text-sm font-medium disabled:opacity-60"
++            >
++              <Plus size={16} aria-hidden="true" />
++              Save & create another
++            </button>
++          </div>
++        </div>
++        {message ? (
++          <p
++            className="rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--muted-foreground)]"
++            aria-live="polite"
++          >
++            {message}
++          </p>
++        ) : null}
++        <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
++          <StepForm
++            id={formId}
++            initialValues={initialValues}
++            tagOptions={existing?.tags ?? []}
++            artistOptions={existing?.artists ?? []}
++            hideActions
++            videoMode="upload"
++            resetSignal={resetSignal}
++            onValuesChange={setValues}
++            onSubmit={handleSubmit}
++          />
++        </section>
++      </div>
++    </WideWithSidebarRight>
++  );
++}
+diff --git a/components/steps/step-form-with-user-data.tsx b/components/steps/step-form-with-user-data.tsx
+index 314efe186cee02dfe4079b89de1e491b186d9b8a..cbb2d46ee3f4d097dedd2354f5af9d696ad98fe5
+--- a/components/steps/step-form-with-user-data.tsx
++++ b/components/steps/step-form-with-user-data.tsx
+@@ -13,7 +13,10 @@
+   initialValues?: Partial<StepFormValues>;
+   currentStepId?: string;
+   existingVideos?: ExistingStepVideo[];
+-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++  onSubmit?: (
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) => void | Promise<void>;
+ };
+ 
+ export function StepFormWithUserData(props: StepFormWithUserDataProps) {
+diff --git a/components/steps/step-form.tsx b/components/steps/step-form.tsx
+index bea8645e116b6a5adc14c3bd5c1f94a945f4e405..96858fcc5d8d1fd8465af1dfd65e228103318e12
+--- a/components/steps/step-form.tsx
++++ b/components/steps/step-form.tsx
+@@ -5,6 +5,8 @@
+ import { Checklist } from "@/components/forms/checklist";
+ import { Select } from "@/components/forms/select";
+ import { TagsInput } from "@/components/forms/tags-input";
++import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
++import type { Id } from "@/convex/_generated/dataModel";
+ import { getActiveAppConfig } from "@/lib/domain/config";
+ import {
+   allowedSmartTags,
+@@ -22,12 +24,21 @@
+ } from "@/lib/steps/step-form-schema";
+ 
+ type StepFormProps = {
++  id?: string;
+   initialValues?: Partial<StepFormValues>;
+   currentStepId?: string;
+   existingVideos?: ExistingStepVideo[];
+   tagOptions?: string[];
+   artistOptions?: string[];
+-  onSubmit?: (input: StepMutationInput) => void | Promise<void>;
++  submitLabel?: string;
++  hideActions?: boolean;
++  videoMode?: "readonly" | "upload";
++  resetSignal?: number;
++  onValuesChange?: (values: StepFormValues) => void;
++  onSubmit?: (
++    input: StepMutationInput,
++    intent: "save" | "save-and-create-another",
++  ) => void | Promise<void>;
+ };
+ 
+ function nextVariationKey() {
+@@ -58,16 +69,22 @@
+ }
+ 
+ export function StepForm({
++  id,
+   initialValues,
+   currentStepId,
+   existingVideos = [],
+   tagOptions = [],
+   artistOptions = [],
++  submitLabel = "Save step",
++  hideActions = false,
++  videoMode = "readonly",
++  resetSignal = 0,
++  onValuesChange,
+   onSubmit,
+ }: StepFormProps) {
+   const config = getActiveAppConfig();
+   const smartTagOptions = useMemo(() => allowedSmartTags(), []);
+-  const [values, setValues] = useState<StepFormValues>(() => {
++  const initialFormValues = useMemo(() => {
+     const defaults = createStepFormDefaults(initialValues);
+     const smartFields = deriveStepFormSmartFields(
+       defaults.name,
+@@ -79,11 +96,22 @@
+       smartTags: initialValues?.smartTags ?? smartFields.smartTags,
+       tokens: initialValues?.tokens ?? smartFields.tokens,
+     };
+-  });
++  }, [initialValues]);
++  const [values, setValues] = useState<StepFormValues>(initialFormValues);
+   const [errors, setErrors] = useState<StepFormErrors>({});
+   const [submitMessage, setSubmitMessage] = useState("");
+ 
+   useEffect(() => {
++    setValues(initialFormValues);
++    setErrors({});
++    setSubmitMessage("");
++  }, [initialFormValues, resetSignal]);
++
++  useEffect(() => {
++    onValuesChange?.(values);
++  }, [onValuesChange, values]);
++
++  useEffect(() => {
+     const timeout = window.setTimeout(() => {
+       setValues((current) => ({
+         ...current,
+@@ -136,36 +164,61 @@
+       return;
+     }
+ 
+-    await onSubmit?.(toMutationInput(result.values));
+-    setSubmitMessage("Step is ready to save.");
++    const submitter = (event.nativeEvent as SubmitEvent)
++      .submitter as HTMLButtonElement | null;
++    const intent =
++      submitter?.value === "save-and-create-another"
++        ? "save-and-create-another"
++        : "save";
++
++    await onSubmit?.(toMutationInput(result.values), intent);
++    setSubmitMessage("Step saved.");
+   }
+ 
+   return (
+-    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
++    <form id={id} className="flex flex-col gap-6" onSubmit={handleSubmit}>
+       <section className="flex flex-col gap-3" aria-labelledby="videos-heading">
+-        <div>
+-          <h2 id="videos-heading" className="text-base font-semibold">
+-            Videos
+-          </h2>
+-          {errors.videos ? (
+-            <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
+-          ) : null}
+-        </div>
+-        {values.videos.length > 0 ? (
+-          <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
+-            {values.videos.map((video) => (
+-              <li key={video.hash} className="px-3 py-2 text-sm">
+-                <span className="font-medium">{video.hash.slice(0, 12)}</span>
+-                <span className="ml-2 text-[var(--muted-foreground)]">
+-                  {video.storageKey}
+-                </span>
+-              </li>
+-            ))}
+-          </ul>
++        {videoMode === "upload" ? (
++          <>
++            <StepVideoUploadField
++              key={resetSignal}
++              initialVideos={values.videos}
++              currentStepId={currentStepId as Id<"steps"> | undefined}
++              onVideosChange={(videos) => update({ videos })}
++            />
++            {errors.videos ? (
++              <p className="text-sm text-red-700">{errors.videos}</p>
++            ) : null}
++          </>
+         ) : (
+-          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
+-            Add a video before saving.
+-          </p>
++          <>
++            <div>
++              <h2 id="videos-heading" className="text-base font-semibold">
++                Videos
++              </h2>
++              {errors.videos ? (
++                <p className="mt-1 text-sm text-red-700">{errors.videos}</p>
++              ) : null}
++            </div>
++            {values.videos.length > 0 ? (
++              <ul className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
++                {values.videos.map((video) => (
++                  <li key={video.hash} className="px-3 py-2 text-sm">
++                    <span className="font-medium">
++                      {video.hash.slice(0, 12)}
++                    </span>
++                    <span className="ml-2 text-[var(--muted-foreground)]">
++                      {video.storageKey}
++                    </span>
++                  </li>
++                ))}
++              </ul>
++            ) : (
++              <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++                Add a video before saving.
++              </p>
++            )}
++          </>
+         )}
+       </section>
+ 
+@@ -176,7 +229,9 @@
+           value={values.name}
+           onChange={(event) => update({ name: event.target.value })}
+         />
+-        {errors.name ? <span className="text-sm text-red-700">{errors.name}</span> : null}
++        {errors.name ? (
++          <span className="text-sm text-red-700">{errors.name}</span>
++        ) : null}
+       </label>
+ 
+       <div className="grid gap-4 md:grid-cols-2">
+@@ -228,7 +283,10 @@
+         />
+       </div>
+ 
+-      <section className="flex flex-col gap-2" aria-labelledby="smart-tags-heading">
++      <section
++        className="flex flex-col gap-2"
++        aria-labelledby="smart-tags-heading"
++      >
+         <h2 id="smart-tags-heading" className="text-sm font-medium">
+           Smart tags
+         </h2>
+@@ -296,15 +354,22 @@
+       </label>
+ 
+       <div className="flex flex-wrap items-center gap-3">
+-        <button
+-          type="submit"
+-          className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
+-        >
+-          <Save size={16} aria-hidden="true" />
+-          Save step
+-        </button>
++        {hideActions ? null : (
++          <button
++            type="submit"
++            name="intent"
++            value="save"
++            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--foreground)] px-4 text-sm font-medium text-white"
++          >
++            <Save size={16} aria-hidden="true" />
++            {submitLabel}
++          </button>
++        )}
+         {submitMessage ? (
+-          <p className="text-sm text-[var(--muted-foreground)]" aria-live="polite">
++          <p
++            className="text-sm text-[var(--muted-foreground)]"
++            aria-live="polite"
++          >
+             {submitMessage}
+           </p>
+         ) : null}
+diff --git a/components/steps/variation-candidate-list.tsx b/components/steps/variation-candidate-list.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2b1dda44d7f14c192ee023eb24dac240a46efc8
+--- /dev/null
++++ b/components/steps/variation-candidate-list.tsx
+@@ -0,0 +1,82 @@
++"use client";
++
++import { VariationToggle } from "./variation-toggle";
++
++export type VariationCandidate = {
++  id: string;
++  name: string;
++  variationKey: string;
++  score: number;
++  kind: string;
++  difficulty: number;
++  tags: string[];
++  smartTags: string[];
++  artists: string[];
++  updatedAt: number;
++};
++
++type VariationCandidateListProps = {
++  candidates: VariationCandidate[];
++  selectedVariationKeys: string[];
++  onToggleVariationKey: (variationKey: string) => void;
++};
++
++export function VariationCandidateList({
++  candidates,
++  selectedVariationKeys,
++  onToggleVariationKey,
++}: VariationCandidateListProps) {
++  const selected = new Set(selectedVariationKeys);
++
++  if (candidates.length === 0) {
++    return (
++      <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-4 text-sm text-[var(--muted-foreground)]">
++        No similar steps yet.
++      </p>
++    );
++  }
++
++  return (
++    <ul className="flex flex-col gap-3">
++      {candidates.map((candidate) => {
++        const hasVariationGroup = candidate.variationKey.trim().length > 0;
++
++        return (
++          <li
++            key={candidate.id}
++            className="rounded-md border border-[var(--border)] bg-white p-3 shadow-sm"
++          >
++            <div className="flex items-start justify-between gap-3">
++              <div className="min-w-0">
++                <h3 className="truncate text-sm font-semibold">
++                  {candidate.name}
++                </h3>
++                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
++                  Score {candidate.score}
++                </p>
++              </div>
++              <VariationToggle
++                variationKey={candidate.variationKey}
++                selected={selected.has(candidate.variationKey)}
++                disabled={!hasVariationGroup}
++                onToggle={onToggleVariationKey}
++              />
++            </div>
++            <div className="mt-3 flex flex-wrap gap-1.5">
++              {[...candidate.tags, ...candidate.smartTags, ...candidate.artists]
++                .slice(0, 6)
++                .map((tag) => (
++                  <span
++                    key={tag}
++                    className="rounded-md bg-[var(--muted)] px-2 py-1 text-xs"
++                  >
++                    {tag}
++                  </span>
++                ))}
++            </div>
++          </li>
++        );
++      })}
++    </ul>
++  );
++}
+diff --git a/components/steps/variation-toggle.tsx b/components/steps/variation-toggle.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d23e66cfaf6626f64b59b678601ffdeda7cba100
+--- /dev/null
++++ b/components/steps/variation-toggle.tsx
+@@ -0,0 +1,31 @@
++"use client";
++
++import { Check } from "lucide-react";
++
++type VariationToggleProps = {
++  variationKey: string;
++  selected: boolean;
++  disabled?: boolean;
++  onToggle: (variationKey: string) => void;
++};
++
++export function VariationToggle({
++  variationKey,
++  selected,
++  disabled = false,
++  onToggle,
++}: VariationToggleProps) {
++  return (
++    <button
++      type="button"
++      disabled={disabled}
++      aria-pressed={selected}
++      className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 data-[selected=true]:border-[var(--foreground)] data-[selected=true]:bg-[var(--foreground)] data-[selected=true]:text-white"
++      data-selected={selected}
++      onClick={() => onToggle(variationKey)}
++    >
++      {selected ? <Check size={16} aria-hidden="true" /> : null}
++      {selected ? "Selected" : "Select"}
++    </button>
++  );
++}
+diff --git a/convex/model/validators.ts b/convex/model/validators.ts
+index fa83fd58c7448a007aed97248bfb3a934ffc545c..8ae5e2411882d81e33843f15088a0ab5605ea50c
+--- a/convex/model/validators.ts
++++ b/convex/model/validators.ts
+@@ -46,6 +46,7 @@
+   notes: v.string(),
+   removedSmartTags: v.array(v.string()),
+   variationKey: v.string(),
++  mergeVariationKeys: v.optional(v.array(v.string())),
+ });
+ 
+ export const updateStepInputValidator = v.object({
+diff --git a/convex/steps.ts b/convex/steps.ts
+index 45b42415640471e1a78aa965c82d71dd0c3e8f89..b2da784522ce7f6eb0351b70456346fd3f8cf337
+--- a/convex/steps.ts
++++ b/convex/steps.ts
+@@ -41,6 +41,42 @@
+   return step;
+ }
+ 
++async function mergeVariationGroups({
++  ctx,
++  ownerId,
++  mergeVariationKeys,
++  variationKey,
++  now,
++}: {
++  ctx: MutationCtx;
++  ownerId: string;
++  mergeVariationKeys: string[] | undefined;
++  variationKey: string;
++  now: number;
++}) {
++  const keys = new Set(
++    (mergeVariationKeys ?? [])
++      .map((key) => key.trim())
++      .filter((key) => key.length > 0 && key !== variationKey),
++  );
++
++  if (keys.size === 0) {
++    return;
++  }
++
++  const steps = await getOwnedSteps(ctx, ownerId);
++  await Promise.all(
++    steps
++      .filter((step) => keys.has(step.variationKey))
++      .map((step) =>
++        ctx.db.patch(step._id, {
++          variationKey,
++          updatedAt: now,
++        }),
++      ),
++  );
++}
++
+ export const listMySteps = query({
+   args: {},
+   handler: async (ctx) => {
+@@ -131,6 +167,14 @@
+     });
+     const stepId = await ctx.db.insert("steps", step);
+ 
++    await mergeVariationGroups({
++      ctx,
++      ownerId,
++      mergeVariationKeys: args.input.mergeVariationKeys,
++      variationKey: args.input.variationKey,
++      now,
++    });
++
+     await enqueueMissingVideoProcessing(ctx, stepId, step.videos);
+ 
+     return stepId;
+diff --git a/next-env.d.ts b/next-env.d.ts
+index c4b7818fbb2c2c34c24feb1b627ee824507c5600..9edff1c7cacb3bfac9a1eadcf6f51eaa99565e38
+--- a/next-env.d.ts
++++ b/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/tests/components/create-step-page.test.tsx b/tests/components/create-step-page.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdc78199b56c2a9f668a268f69a0cf8d1d42f2cd
+--- /dev/null
++++ b/tests/components/create-step-page.test.tsx
+@@ -0,0 +1,168 @@
++import { render, screen, waitFor, within } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { CreateStepWorkflow } from "@/components/steps/create-step-workflow";
++
++const mocks = vi.hoisted(() => ({
++  createStep: vi.fn(),
++  push: vi.fn(),
++}));
++
++vi.mock("next/navigation", () => ({
++  useRouter: () => ({ push: mocks.push }),
++}));
++
++vi.mock("convex/react", async () => {
++  const actualApi = await vi.importActual<
++    typeof import("@/convex/_generated/api")
++  >("@/convex/_generated/api");
++
++  return {
++    useMutation: () => mocks.createStep,
++    useQuery: (ref: unknown) => {
++      if (ref === actualApi.api.steps.getExistingTagsAndArtists) {
++        return {
++          tags: ["turn", "frame"],
++          artists: ["Petchu"],
++        };
++      }
++
++      return [
++        {
++          _id: "step-shadow",
++          name: "Shadow turn",
++          variationKey: "group-shadow",
++          tokens: ["shadow", "turn", "shadow|turn"],
++          tags: ["turn"],
++          smartTags: ["Shadow position"],
++          artists: ["Petchu"],
++          kind: "step",
++          difficulty: 3,
++          updatedAt: 20,
++        },
++        {
++          _id: "step-basic",
++          name: "Basic",
++          variationKey: "group-basic",
++          tokens: ["basic"],
++          tags: ["frame"],
++          smartTags: [],
++          artists: [],
++          kind: "step",
++          difficulty: 1,
++          updatedAt: 10,
++        },
++      ];
++    },
++  };
++});
++
++vi.mock("@/components/video/step-video-upload-field", () => ({
++  StepVideoUploadField: ({
++    onVideosChange,
++  }: {
++    onVideosChange: (
++      videos: Array<{ hash: string; storageKey: string }>,
++    ) => void;
++  }) => (
++    <button
++      type="button"
++      onClick={() =>
++        onVideosChange([
++          {
++            hash: "hash-video",
++            storageKey: "owners/user/videos/hash-video.mp4",
++          },
++        ])
++      }
++    >
++      Add mocked video
++    </button>
++  ),
++}));
++
++describe("CreateStepWorkflow", () => {
++  beforeEach(() => {
++    mocks.createStep.mockReset();
++    mocks.createStep.mockResolvedValue("new-step");
++    mocks.push.mockReset();
++  });
++
++  it("creates a step and navigates to the steps list", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    await user.click(screen.getByRole("button", { name: "Add mocked video" }));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++    await user.click(screen.getByLabelText("Semba"));
++
++    await waitFor(() =>
++      expect(
++        screen.getAllByRole("button", { name: "Select" })[0],
++      ).toBeVisible(),
++    );
++    await user.click(screen.getAllByRole("button", { name: "Select" })[0]);
++    await user.click(screen.getByRole("button", { name: "Save" }));
++
++    await waitFor(() =>
++      expect(mocks.createStep).toHaveBeenCalledWith({
++        input: expect.objectContaining({
++          name: "Shadow turn",
++          videos: [
++            {
++              hash: "hash-video",
++              storageKey: "owners/user/videos/hash-video.mp4",
++            },
++          ],
++          feeling: ["semba"],
++          mergeVariationKeys: ["group-shadow"],
++        }),
++      }),
++    );
++    expect(mocks.push).toHaveBeenCalledWith("/steps");
++  });
++
++  it("reranks candidates from current form data", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    const list = screen.getByText("Variation candidates").closest("section");
++    expect(list).not.toBeNull();
++
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++
++    await waitFor(() => {
++      const items = within(list as HTMLElement).getAllByRole("listitem");
++      expect(items[0]).toHaveTextContent("Shadow turn");
++      expect(items[0]).toHaveTextContent("Score 16");
++    });
++  });
++
++  it("save and create another preserves selected fields only", async () => {
++    const user = userEvent.setup();
++    render(<CreateStepWorkflow />);
++
++    await user.click(screen.getByRole("button", { name: "Add mocked video" }));
++    await user.type(screen.getByLabelText("Name"), "Shadow turn");
++    await user.click(screen.getByLabelText("Semba"));
++    await user.type(screen.getByLabelText("Tags"), "turn{enter}");
++    await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
++    await user.click(screen.getAllByRole("button", { name: "Select" })[0]);
++    await user.click(
++      screen.getByRole("button", { name: "Save & create another" }),
++    );
++
++    await waitFor(() => expect(mocks.createStep).toHaveBeenCalledTimes(1));
++    expect(screen.getByLabelText("Name")).toHaveValue("");
++    expect(screen.getByLabelText("Semba")).toBeChecked();
++    expect(
++      within(screen.getByLabelText("Selected tags")).getByText("turn"),
++    ).toBeInTheDocument();
++    expect(
++      within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
++    ).toBeInTheDocument();
++    expect(
++      screen.queryByRole("button", { name: "Selected" }),
++    ).not.toBeInTheDocument();
++  });
++});
+diff --git a/tests/components/step-form.test.tsx b/tests/components/step-form.test.tsx
+index 037b1c515faea6ee616ff6e101670e53cf031725..7eb34220c310c8f9fab593fdceb0d945ee03efea
+--- a/tests/components/step-form.test.tsx
++++ b/tests/components/step-form.test.tsx
+@@ -102,18 +102,21 @@
+     await user.click(screen.getByLabelText("Semba"));
+     await user.click(screen.getByRole("button", { name: "Save step" }));
+ 
+-    expect(onSubmit).toHaveBeenCalledWith({
+-      name: "Saida damska",
+-      videos: [validVideo],
+-      difficulty: 1,
+-      feeling: ["semba"],
+-      kind: "step",
+-      tags: [],
+-      artists: [],
+-      notes: "",
+-      removedSmartTags: [],
+-      variationKey: expect.any(String),
+-    });
++    expect(onSubmit).toHaveBeenCalledWith(
++      {
++        name: "Saida damska",
++        videos: [validVideo],
++        difficulty: 1,
++        feeling: ["semba"],
++        kind: "step",
++        tags: [],
++        artists: [],
++        notes: "",
++        removedSmartTags: [],
++        variationKey: expect.any(String),
++      },
++      "save",
++    );
+   });
+ 
+   it("debounces name smart tags and moves removed tags to removedSmartTags", async () => {
+@@ -155,7 +158,9 @@
+       }),
+     ).not.toBeInTheDocument();
+     expect(screen.getByText("Removed smart tags")).toBeInTheDocument();
+-    expect(screen.getByLabelText("Restore smart tag Shadow position")).toBeInTheDocument();
++    expect(
++      screen.getByLabelText("Restore smart tag Shadow position"),
++    ).toBeInTheDocument();
+ 
+     await user.click(screen.getByRole("button", { name: "Save step" }));
+ 
+@@ -163,6 +168,7 @@
+       expect.objectContaining({
+         removedSmartTags: ["Shadow position"],
+       }),
++      "save",
+     );
+   });
+ 
+@@ -186,8 +192,10 @@
+     await user.type(screen.getByLabelText("Tags"), "balance{enter}");
+     await user.type(screen.getByLabelText("Artists"), "Petchu{enter}");
+ 
+-    expect(within(screen.getByLabelText("Selected tags")).getByText("balance")).toBeInTheDocument();
+     expect(
++      within(screen.getByLabelText("Selected tags")).getByText("balance"),
++    ).toBeInTheDocument();
++    expect(
+       within(screen.getByLabelText("Selected artists")).getByText("Petchu"),
+     ).toBeInTheDocument();
+     expect(screen.getByRole("option", { name: "frame" })).toBeInTheDocument();
+
+tokens used
+144.603
+<promise>COMPLETE</promise>
