@@ -1,4 +1,4 @@
-import { StepVideoUploadField } from "@/components/video/step-video-upload-field";
+import { StepFormWithUserData } from "@/components/steps/step-form-with-user-data";
 
 export default function NewStepPage() {
   return (
@@ -10,7 +10,7 @@ export default function NewStepPage() {
         <h1 className="mt-2 text-3xl font-semibold">Create Step</h1>
       </div>
       <section className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
-        <StepVideoUploadField />
+        <StepFormWithUserData />
       </section>
     </main>
   );

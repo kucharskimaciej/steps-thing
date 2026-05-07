@@ -173,7 +173,7 @@
     {
       "id": "S04-01-build-step-form-validation-and-smart-tags",
       "title": "Build Step Form Validation And Smart Tags",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S03-03-build-video-player-and-modal"
       ],
@@ -182,7 +182,10 @@
         "One shared form supports create/edit/inline edit.",
         "Production UI does not show raw debug JSON.",
         "Form output matches the Convex step mutation input."
-      ]
+      ],
+      "startedAt": "2026-05-07T18:54:47.909132+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-07T18:54:47.909337+00:00"
     },
     {
       "id": "S04-02-implement-create-step-page",

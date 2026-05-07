@@ -41,3 +41,8 @@
 [2026-05-07 20:37:15] Completed security performance regression review before commit
 [2026-05-07 20:38:11] Updated progress log for S03-03 video player and modal
 [2026-05-07 20:39:28] ITERATION 3 end (duration=727s)
+[2026-05-07 20:54:48] ITERATION 1 start (mode=build story=S04-01-build-step-form-validation-and-smart-tags)
+[2026-05-07 21:00:09] Implemented shared step form schema controls smart tags and tests
+[2026-05-07 21:03:36] Browser verified step form via temporary local preview route
+[2026-05-07 21:05:11] Verification passed: pnpm typecheck, lint, test, build
+[2026-05-07 21:05:43] Completed security performance regression review for S04-01
