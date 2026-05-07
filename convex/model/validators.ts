@@ -23,6 +23,12 @@ export const videoValidator = v.object({
   height: v.optional(v.number()),
 });
 
+export const videoProcessingStatusValidator = v.union(
+  v.literal("running"),
+  v.literal("succeeded"),
+  v.literal("failed"),
+);
+
 export const practiceRecordValidator = v.object({
   date: v.number(),
   startOfDay: v.number(),
@@ -99,4 +105,13 @@ export const importedSessionValidator = v.object({
   locked: v.boolean(),
   createdAt: v.number(),
   updatedAt: v.number(),
+});
+
+export const processedVideoMetadataValidator = v.object({
+  hash: v.string(),
+  storageKey: v.string(),
+  snapshotStorageKey: v.string(),
+  thumbnailStorageKey: v.string(),
+  width: v.number(),
+  height: v.number(),
 });

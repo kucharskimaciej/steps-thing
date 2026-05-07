@@ -52,6 +52,20 @@ describe("Convex schema", () => {
     ]);
   });
 
+  it("defines video processing job indexes", () => {
+    expect(table("videoProcessingJobs").indexes).toEqual([
+      { indexDescriptor: "by_step", fields: ["stepId"] },
+      {
+        indexDescriptor: "by_owner_status",
+        fields: ["ownerId", "status"],
+      },
+      {
+        indexDescriptor: "by_video",
+        fields: ["stepId", "videoHash", "storageKey"],
+      },
+    ]);
+  });
+
   it("stores denormalized video hashes on steps", () => {
     expect(table("steps").documentType.value.videoHashes).toEqual({
       fieldType: {

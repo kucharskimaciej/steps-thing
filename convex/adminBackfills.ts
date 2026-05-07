@@ -4,6 +4,7 @@ import { matchSmartTags } from "../lib/domain/smart-tags";
 import { tokenizeStepName } from "../lib/domain/tokenize";
 import { mutation, type MutationCtx } from "./_generated/server";
 import { requireAdminUser } from "./adminAuth";
+import { enqueueMissingVideoProcessing } from "./videoProcessing";
 
 export const refreshSmartTags = mutation({
   args: { limit: v.optional(v.number()) },
@@ -37,16 +38,19 @@ export const recreateThumbnails = mutation({
     let updated = 0;
 
     for (const step of steps) {
+      const videos = step.videos.map((video) => ({
+        hash: video.hash,
+        storageKey: video.storageKey,
+        width: video.width,
+        height: video.height,
+      }));
+
       await ctx.db.patch(step._id, {
-        videos: step.videos.map((video) => ({
-          hash: video.hash,
-          storageKey: video.storageKey,
-          width: video.width,
-          height: video.height,
-        })),
+        videos,
         needsVideoProcessing: true,
         updatedAt: Date.now(),
       });
+      await enqueueMissingVideoProcessing(ctx, step._id, videos);
       updated += 1;
     }
 
@@ -73,10 +77,7 @@ export const recomputeTokens = mutation({
   },
 });
 
-async function loadSteps(
-  ctx: MutationCtx,
-  limit: number | undefined,
-) {
+async function loadSteps(ctx: MutationCtx, limit: number | undefined) {
   const steps = await ctx.db.query("steps").collect();
 
   return limit === undefined ? steps : steps.slice(0, limit);

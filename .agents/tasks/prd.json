@@ -138,7 +138,7 @@
     {
       "id": "S03-02-implement-video-processing-pipeline",
       "title": "Implement Video Processing Pipeline",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S03-01-implement-video-hashing-upload-and-duplicate-detection"
       ],
@@ -148,7 +148,10 @@
         "Processing does not loop forever.",
         "Failed jobs are observable.",
         "Generated media is stored in Google Cloud Storage."
-      ]
+      ],
+      "startedAt": "2026-05-07T18:17:45.100179+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-07T18:17:45.100478+00:00"
     },
     {
       "id": "S03-03-build-video-player-and-modal",

@@ -4,6 +4,7 @@ import { getActiveAppConfig } from "../../lib/domain/config";
 import { matchSmartTags } from "../../lib/domain/smart-tags";
 import { tokenizeStepName } from "../../lib/domain/tokenize";
 import { scoreVariationCandidate } from "../../lib/domain/variation-score";
+import { stepNeedsVideoProcessing } from "../../lib/video/processing-status";
 import type {
   createStepInputValidator,
   practiceRecordInputValidator,
@@ -82,6 +83,7 @@ export function buildCreatedStep({
     viewRecords: [],
     createdAt: now,
     updatedAt: now,
+    needsVideoProcessing: stepNeedsVideoProcessing(input.videos),
   };
 }
 
@@ -94,8 +96,9 @@ export function buildStepPatch({
   input: UpdateStepInput;
   now: number;
 }): Partial<Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">> {
-  const patch: Partial<Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">> =
-    { updatedAt: now };
+  const patch: Partial<
+    Omit<Doc<"steps">, "_id" | "_creationTime" | "ownerId">
+  > = { updatedAt: now };
 
   if (input.name !== undefined) {
     patch.name = input.name;
@@ -105,6 +108,7 @@ export function buildStepPatch({
   if (input.videos !== undefined) {
     patch.videos = input.videos;
     patch.videoHashes = input.videos.map((video) => video.hash);
+    patch.needsVideoProcessing = stepNeedsVideoProcessing(input.videos);
   }
 
   if (input.difficulty !== undefined) {
@@ -204,7 +208,10 @@ export function rankVariationCandidates({
       }),
     }))
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || right.updatedAt - left.updatedAt)
+    .sort(
+      (left, right) =>
+        right.score - left.score || right.updatedAt - left.updatedAt,
+    )
     .slice(0, 20);
 }
 

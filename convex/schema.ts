@@ -4,6 +4,7 @@ import {
   difficultyValidator,
   kindValidator,
   practiceRecordValidator,
+  videoProcessingStatusValidator,
   videoValidator,
 } from "./model/validators";
 
@@ -50,4 +51,24 @@ export default defineSchema({
     .index("by_legacyId", ["legacyId"])
     .index("by_owner", ["ownerId"])
     .index("by_owner_createdAt", ["ownerId", "createdAt"]),
+  videoProcessingJobs: defineTable({
+    stepId: v.id("steps"),
+    ownerId: v.string(),
+    videoHash: v.string(),
+    storageKey: v.string(),
+    status: videoProcessingStatusValidator,
+    attempts: v.number(),
+    snapshotStorageKey: v.optional(v.string()),
+    thumbnailStorageKey: v.optional(v.string()),
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_step", ["stepId"])
+    .index("by_owner_status", ["ownerId", "status"])
+    .index("by_video", ["stepId", "videoHash", "storageKey"]),
 });

@@ -25,3 +25,7 @@
 [2026-05-07 20:15:49] Final verification passed and review completed for S03-01
 [2026-05-07 20:16:35] Updated progress log for S03-01 video upload hashing
 [2026-05-07 20:17:40] ITERATION 1 end (duration=887s)
+[2026-05-07 20:17:45] ITERATION 2 start (mode=build story=S03-02-implement-video-processing-pipeline)
+[2026-05-07 20:18:30] Start S03-02 video processing pipeline
+[2026-05-07 20:23:10] Implemented video processing helpers, Convex jobs, GCS worker
+[2026-05-07 20:24:33] Verification passed for S03-02 video processing pipeline

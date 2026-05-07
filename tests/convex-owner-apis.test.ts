@@ -41,11 +41,14 @@ describe("Convex auth helper", () => {
 describe("owner-scoped step model", () => {
   it("increments identifiers per owner", () => {
     expect(
-      nextIdentifier([
-        { ownerId: "user-a", identifier: 1 },
-        { ownerId: "user-b", identifier: 9 },
-        { ownerId: "user-a", identifier: 2 },
-      ], "user-a"),
+      nextIdentifier(
+        [
+          { ownerId: "user-a", identifier: 1 },
+          { ownerId: "user-b", identifier: 9 },
+          { ownerId: "user-a", identifier: 2 },
+        ],
+        "user-a",
+      ),
     ).toBe(3);
   });
 
@@ -72,6 +75,7 @@ describe("owner-scoped step model", () => {
       ownerId: "user-a",
       identifier: 4,
       videoHashes: ["hash-a"],
+      needsVideoProcessing: true,
       createdAt: 10,
       updatedAt: 10,
     });

@@ -1,7 +1,12 @@
 import { v } from "convex/values";
 import { requireUserId } from "./auth";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import {
+  mutation,
+  type MutationCtx,
+  query,
+  type QueryCtx,
+} from "./_generated/server";
 import {
   applyStepView,
   assertStepOwner,
@@ -16,6 +21,7 @@ import {
   practiceRecordInputValidator,
   updateStepInputValidator,
 } from "./model/validators";
+import { enqueueMissingVideoProcessing } from "./videoProcessing";
 
 async function getOwnedSteps(ctx: QueryCtx, ownerId: string) {
   return await ctx.db
@@ -76,7 +82,9 @@ export const getExistingTagsAndArtists = query({
     const steps = await getOwnedSteps(ctx, ownerId);
 
     return {
-      tags: [...new Set(steps.flatMap((step) => [...step.tags, ...step.smartTags]))].sort(),
+      tags: [
+        ...new Set(steps.flatMap((step) => [...step.tags, ...step.smartTags])),
+      ].sort(),
       artists: [...new Set(steps.flatMap((step) => step.artists))].sort(),
     };
   },
@@ -92,7 +100,9 @@ export const getVariationCandidates = query({
         ? await ctx.db
             .query("steps")
             .withIndex("by_owner_variationKey", (index) =>
-              index.eq("ownerId", ownerId).eq("variationKey", source.variationKey),
+              index
+                .eq("ownerId", ownerId)
+                .eq("variationKey", source.variationKey),
             )
             .collect()
         : await getOwnedSteps(ctx, ownerId);
@@ -113,10 +123,17 @@ export const createStep = mutation({
     const identifier = nextIdentifier(lastStep ? [lastStep] : [], ownerId);
     const now = Date.now();
 
-    return await ctx.db.insert(
-      "steps",
-      buildCreatedStep({ ownerId, identifier, now, input: args.input }),
-    );
+    const step = buildCreatedStep({
+      ownerId,
+      identifier,
+      now,
+      input: args.input,
+    });
+    const stepId = await ctx.db.insert("steps", step);
+
+    await enqueueMissingVideoProcessing(ctx, stepId, step.videos);
+
+    return stepId;
   },
 });
 
@@ -126,10 +143,17 @@ export const updateStep = mutation({
     const ownerId = await requireUserId(ctx);
     const step = await getOwnedStep(ctx, args.id, ownerId);
 
-    await ctx.db.patch(
-      args.id,
-      buildStepPatch({ existing: step, input: args.input, now: Date.now() }),
-    );
+    const patch = buildStepPatch({
+      existing: step,
+      input: args.input,
+      now: Date.now(),
+    });
+
+    await ctx.db.patch(args.id, patch);
+
+    if (patch.videos) {
+      await enqueueMissingVideoProcessing(ctx, args.id, patch.videos);
+    }
 
     return args.id;
   },
