@@ -15,6 +15,7 @@ import {
   mergePracticeRecord,
   nextIdentifier,
   rankVariationCandidates,
+  toPublicStep,
 } from "./model/steps";
 import {
   createStepInputValidator,
@@ -112,17 +113,21 @@ export const getStepForEdit = query({
 });
 
 export const getPublicStep = query({
-  args: { id: v.id("steps") },
+  args: { id: v.string() },
   handler: async (ctx, args) => {
-    const step = await ctx.db.get(args.id);
+    const id = ctx.db.normalizeId("steps", args.id);
+
+    if (!id) {
+      return null;
+    }
+
+    const step = await ctx.db.get(id);
 
     if (!step) {
       return null;
     }
 
-    const { ownerId: _ownerId, ...publicStep } = step;
-
-    return publicStep;
+    return toPublicStep(step);
   },
 });
 

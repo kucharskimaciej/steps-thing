@@ -6,6 +6,7 @@ import {
   buildCreatedStep,
   mergePracticeRecord,
   nextIdentifier,
+  toPublicStep,
   type PracticeRecordInput,
 } from "@/convex/model/steps";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -88,6 +89,48 @@ describe("owner-scoped step model", () => {
     expect(() => assertStepOwner({ ownerId: "user-b" }, "user-a")).toThrow(
       "Step not found",
     );
+  });
+
+  it("limits public step exposure to read-only share fields", () => {
+    const publicStep = toPublicStep({
+      _id: "step-a" as Id<"steps">,
+      _creationTime: 1,
+      ownerId: "user-a",
+      identifier: 2,
+      name: "Shadow turn",
+      videos: [{ hash: "hash-a", storageKey: "videos/user-a/hash-a" }],
+      videoHashes: ["hash-a"],
+      difficulty: 3,
+      feeling: ["smooth"],
+      kind: "step",
+      tags: ["turn"],
+      artists: ["Petchu"],
+      notes: "private note",
+      smartTags: ["Shadow position"],
+      removedSmartTags: [],
+      tokens: ["shadow"],
+      variationKey: "variation",
+      practiceRecords: [{ date: 1, startOfDay: 0 }],
+      viewRecords: [1],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    expect(publicStep).toEqual({
+      _id: "step-a",
+      identifier: 2,
+      name: "Shadow turn",
+      videos: [{ hash: "hash-a", storageKey: "videos/user-a/hash-a" }],
+      difficulty: 3,
+      feeling: ["smooth"],
+      kind: "step",
+      tags: ["turn"],
+      artists: ["Petchu"],
+      smartTags: ["Shadow position"],
+    });
+    expect(publicStep).not.toHaveProperty("ownerId");
+    expect(publicStep).not.toHaveProperty("notes");
+    expect(publicStep).not.toHaveProperty("practiceRecords");
   });
 
   it("prepends view timestamps and updates last viewed time", () => {

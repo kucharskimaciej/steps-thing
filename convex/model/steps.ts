@@ -17,6 +17,20 @@ export type PracticeRecordInput = Infer<typeof practiceRecordInputValidator>;
 
 type ExistingIdentifier = Pick<Doc<"steps">, "identifier" | "ownerId">;
 
+export type PublicStep = Pick<
+  Doc<"steps">,
+  | "_id"
+  | "identifier"
+  | "name"
+  | "videos"
+  | "difficulty"
+  | "feeling"
+  | "kind"
+  | "tags"
+  | "artists"
+  | "smartTags"
+>;
+
 export function assertStepOwner(
   step: Pick<Doc<"steps">, "ownerId"> | null,
   ownerId: string,
@@ -213,6 +227,21 @@ export function rankVariationCandidates({
         right.score - left.score || right.updatedAt - left.updatedAt,
     )
     .slice(0, 20);
+}
+
+export function toPublicStep(step: Doc<"steps">): PublicStep {
+  return {
+    _id: step._id,
+    identifier: step.identifier,
+    name: step.name,
+    videos: step.videos,
+    difficulty: step.difficulty,
+    feeling: step.feeling,
+    kind: step.kind,
+    tags: step.tags,
+    artists: step.artists,
+    smartTags: step.smartTags,
+  };
 }
 
 export function publicStepId(id: Id<"steps">): Id<"steps"> {
