@@ -9,6 +9,7 @@ backups/
 .DS_Store
 ralph-*.log
 .ralph/.tmp/
+.ralph/runs/
 .codex
 .agents/*
 !.agents/ralph/
