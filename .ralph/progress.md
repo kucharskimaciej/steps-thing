@@ -763,3 +763,35 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-14
   - Existing feed and step-list tests already cover practice button states and clipboard behavior.
   - Test-only changes still pass the full Next build because test files are included in TypeScript checks.
 ---
+## [2026-05-08 14:30 CEST] - S08-03-create-release-smoke-test-and-operational-checklist: Create Release Smoke Test And Operational Checklist
+Thread:
+Run: 20260508-141039-34678 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 25cdf7a docs(release): add release readiness docs
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> SKIP (no Convex schema/functions changed)
+  - Command: deployed preview manual smoke walkthrough -> SKIP (preview environment unresolved)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - docs/operations.md
+  - docs/production-environment.md
+  - docs/release-smoke-test.md
+- What was implemented
+  - Added repeatable release smoke test covering auth, public sharing, upload, create/edit, inline edit, variation merge, search/filter/sort, feed tracking, practice, step list, shortlinks, sessions, historical practice, migration dry run, and video backfill.
+  - Added production environment checklist for Convex, Clerk, Google Cloud Storage, video worker, server secrets, and public env vars.
+  - Added operations checklist for automated evidence, video failures, migration counts, auth failures, monitoring, and cutover watch.
+- **Learnings for future iterations:**
+  - Convex CLI function args are a JSON object after the function name, e.g. `pnpm exec convex run --prod adminBackfills:recreateThumbnails '{"limit":1}'`.
+  - Video processing job statuses are `running`, `succeeded`, and `failed`; skipped videos avoid duplicate running jobs rather than storing a skipped job.
+  - The release smoke-test target preview environment remains the only unresolved manual validation input.
+---
