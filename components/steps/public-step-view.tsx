@@ -3,7 +3,7 @@ import { StepTags } from "./step-tags";
 import { VideoPlayer } from "../video/video-player";
 
 type PublicStepViewProps = {
-  step: Omit<PublicStep, "_id" | "identifier" | "videos">;
+  step: Omit<PublicStep, "_id" | "identifier" | "primaryVideo">;
   primaryVideo: {
     videoUrl: string;
     snapshotUrl?: string;

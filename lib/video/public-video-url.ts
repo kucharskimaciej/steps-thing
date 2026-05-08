@@ -3,7 +3,7 @@ import { createSignedGcsUrl, getGcsConfigFromEnv } from "./gcs";
 
 const publicReadTtlSeconds = 15 * 60;
 
-type PublicStepVideo = PublicStep["videos"][number];
+type PublicStepVideo = NonNullable<PublicStep["primaryVideo"]>;
 
 export type ResolvedPublicStepVideo = PublicStepVideo & {
   videoUrl: string;
@@ -14,10 +14,10 @@ export function resolvePublicStepVideoUrls({
   step,
   now = Date.now(),
 }: {
-  step: Pick<PublicStep, "videos">;
+  step: Pick<PublicStep, "primaryVideo">;
   now?: number;
 }): { primaryVideo: ResolvedPublicStepVideo | null } {
-  const primaryVideo = step.videos[0];
+  const primaryVideo = step.primaryVideo;
 
   if (!primaryVideo) {
     return { primaryVideo: null };

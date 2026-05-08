@@ -17,19 +17,25 @@ export type PracticeRecordInput = Infer<typeof practiceRecordInputValidator>;
 
 type ExistingIdentifier = Pick<Doc<"steps">, "identifier" | "ownerId">;
 
+export type PublicStepVideo = Pick<
+  Doc<"steps">["videos"][number],
+  "storageKey" | "snapshotStorageKey" | "width" | "height"
+>;
+
 export type PublicStep = Pick<
   Doc<"steps">,
   | "_id"
   | "identifier"
   | "name"
-  | "videos"
   | "difficulty"
   | "feeling"
   | "kind"
   | "tags"
   | "artists"
   | "smartTags"
->;
+> & {
+  primaryVideo: PublicStepVideo | null;
+};
 
 export function assertStepOwner(
   step: Pick<Doc<"steps">, "ownerId"> | null,
@@ -258,11 +264,20 @@ export function selectHistoricalPracticeSteps({
 }
 
 export function toPublicStep(step: Doc<"steps">): PublicStep {
+  const primaryVideo = step.videos[0];
+
   return {
     _id: step._id,
     identifier: step.identifier,
     name: step.name,
-    videos: step.videos,
+    primaryVideo: primaryVideo
+      ? {
+          storageKey: primaryVideo.storageKey,
+          snapshotStorageKey: primaryVideo.snapshotStorageKey,
+          width: primaryVideo.width,
+          height: primaryVideo.height,
+        }
+      : null,
     difficulty: step.difficulty,
     feeling: step.feeling,
     kind: step.kind,

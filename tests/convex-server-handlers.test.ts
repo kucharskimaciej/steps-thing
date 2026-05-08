@@ -166,7 +166,12 @@ describe("private Convex handlers", () => {
       _id: "step-main",
       identifier: 1,
       name: "Shadow turn",
-      videos: [processedVideo("hash-a")],
+      primaryVideo: {
+        storageKey: "owners/user/videos/hash-a.mp4",
+        snapshotStorageKey: "owners/user/snapshots/hash-a.jpg",
+        width: 1080,
+        height: 1920,
+      },
       difficulty: 3,
       feeling: ["urban"],
       kind: "step",
@@ -279,9 +284,88 @@ describe("step mutation rules", () => {
       expect.anything(),
     );
   });
+
+  it("rejects direct updates to another owner's step", async () => {
+    const ctx = {
+      ...authCtx("user-a"),
+      db: {
+        get: vi.fn(async () => stepDoc({ ownerId: "user-b" })),
+      },
+    };
+
+    await expect(
+      runHandler(steps.updateStep, ctx, {
+        id: "step-other",
+        input: { name: "Cross-owner edit" },
+      }),
+    ).rejects.toThrow("Step not found");
+  });
+
+  it("rejects practice records tied to another owner's session", async () => {
+    const ctx = {
+      ...authCtx("user-a"),
+      db: {
+        get: vi
+          .fn()
+          .mockResolvedValueOnce(stepDoc())
+          .mockResolvedValueOnce({
+            _id: "session-b",
+            _creationTime: 1,
+            ownerId: "user-b",
+            name: "Other training",
+            steps: [],
+            locked: false,
+            createdAt: 1,
+            updatedAt: 1,
+          }),
+      },
+    };
+
+    await expect(
+      runHandler(steps.recordPractice, ctx, {
+        id: "step-main",
+        record: {
+          date: 2,
+          startOfDay: 0,
+          collectionId: "session-b" as Id<"practiceSessions">,
+        },
+      }),
+    ).rejects.toThrow("Practice session not found");
+  });
 });
 
 describe("practice session mutation rules", () => {
+  it("rejects adding another owner's step to a session", async () => {
+    const patch = vi.fn();
+    const ctx = {
+      ...authCtx("user-a"),
+      db: {
+        get: vi
+          .fn()
+          .mockResolvedValueOnce({
+            _id: "session-a",
+            _creationTime: 1,
+            ownerId: "user-a",
+            name: "Training",
+            steps: [],
+            locked: false,
+            createdAt: 1,
+            updatedAt: 1,
+          })
+          .mockResolvedValueOnce(stepDoc({ ownerId: "user-b" })),
+        patch,
+      },
+    };
+
+    await expect(
+      runHandler(practiceSessions.addStepToSession, ctx, {
+        sessionId: "session-a",
+        stepId: "step-other",
+      }),
+    ).rejects.toThrow("Step not found");
+    expect(patch).not.toHaveBeenCalled();
+  });
+
   it("rejects edits to locked sessions", async () => {
     const ctx = {
       ...authCtx("user-a"),

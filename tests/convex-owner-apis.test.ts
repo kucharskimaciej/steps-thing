@@ -98,7 +98,10 @@ describe("owner-scoped step model", () => {
       ownerId: "user-a",
       identifier: 2,
       name: "Shadow turn",
-      videos: [{ hash: "hash-a", storageKey: "videos/user-a/hash-a" }],
+      videos: [
+        { hash: "hash-a", storageKey: "videos/user-a/hash-a", width: 1920 },
+        { hash: "hash-b", storageKey: "videos/user-a/hash-b" },
+      ],
       videoHashes: ["hash-a"],
       difficulty: 3,
       feeling: ["smooth"],
@@ -120,7 +123,10 @@ describe("owner-scoped step model", () => {
       _id: "step-a",
       identifier: 2,
       name: "Shadow turn",
-      videos: [{ hash: "hash-a", storageKey: "videos/user-a/hash-a" }],
+      primaryVideo: {
+        storageKey: "videos/user-a/hash-a",
+        width: 1920,
+      },
       difficulty: 3,
       feeling: ["smooth"],
       kind: "step",
@@ -131,6 +137,8 @@ describe("owner-scoped step model", () => {
     expect(publicStep).not.toHaveProperty("ownerId");
     expect(publicStep).not.toHaveProperty("notes");
     expect(publicStep).not.toHaveProperty("practiceRecords");
+    expect(publicStep).not.toHaveProperty("videos");
+    expect(publicStep.primaryVideo).not.toHaveProperty("hash");
   });
 
   it("prepends view timestamps and updates last viewed time", () => {
