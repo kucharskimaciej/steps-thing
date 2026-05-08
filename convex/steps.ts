@@ -92,6 +92,31 @@ export const listMySteps = query({
   },
 });
 
+export const listMyHistoricalPracticeDays = query({
+  args: {},
+  handler: async (ctx) => {
+    const ownerId = await requireUserId(ctx);
+    const steps = await getOwnedSteps(ctx, ownerId);
+    const practicedStepsByDay = new Map<number, Set<Id<"steps">>>();
+
+    for (const step of steps) {
+      for (const record of step.practiceRecords) {
+        const practicedSteps =
+          practicedStepsByDay.get(record.startOfDay) ?? new Set<Id<"steps">>();
+        practicedSteps.add(step._id);
+        practicedStepsByDay.set(record.startOfDay, practicedSteps);
+      }
+    }
+
+    return [...practicedStepsByDay.entries()]
+      .map(([startOfDay, practicedSteps]) => ({
+        startOfDay,
+        practicedStepCount: practicedSteps.size,
+      }))
+      .sort((left, right) => right.startOfDay - left.startOfDay);
+  },
+});
+
 export const getStepForEdit = query({
   args: { id: v.string() },
   handler: async (ctx, args) => {

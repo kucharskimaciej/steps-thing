@@ -11,6 +11,7 @@ type MobileNavigationProps = {
 
 const links = [
   { href: "/feed", label: "Feed" },
+  { href: "/sessions", label: "Sessions" },
   { href: "/steps/new", label: "Create step" },
 ];
 
