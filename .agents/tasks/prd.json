@@ -304,7 +304,7 @@
     {
       "id": "S06-01-implement-private-step-list",
       "title": "Implement Private Step List",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S05-04-implement-view-and-practice-recording"
       ],
@@ -312,7 +312,10 @@
       "acceptanceCriteria": [
         "`/steps` provides all legacy list information.",
         "Copy-to-clipboard works with browser clipboard API."
-      ]
+      ],
+      "startedAt": "2026-05-08T09:36:55.141787+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-08T09:36:55.141946+00:00"
     },
     {
       "id": "S06-02-implement-public-step-page",
