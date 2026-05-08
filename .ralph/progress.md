@@ -5,6 +5,45 @@ Started: Thu May  7 13:09:57 CEST 2026
 - (add reusable patterns here)
 
 ---
+## [2026-05-08 12:43:24 CEST] - S07-01-implement-sessions-list: Implement Sessions List
+Thread:
+Run: 20260508-123428-27940 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 18a41b9 feat(sessions): implement sessions list
+- Post-commit status: clean after progress commit
+- Verification:
+  - Command: pnpm test -- --run tests/components/sessions-list.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/sessions -> PASS (auth redirect, no console errors)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/sessions/page.tsx
+  - components/app-shell/mobile-navigation.tsx
+  - components/app-shell/top-bar.tsx
+  - components/sessions/historical-session-card.tsx
+  - components/sessions/session-card.tsx
+  - components/sessions/sessions-list.tsx
+  - convex/steps.ts
+  - tests/components/sessions-list.test.tsx
+- What was implemented
+  - Replaced `/sessions` placeholder with saved sessions and historical practice sections.
+  - Added default empty session creation with `Practice dd MMM` naming.
+  - Added historical day summaries grouped by unique practiced steps and sorted newest first.
+  - Added Sessions navigation links for workflow discoverability.
+- **Learnings for future iterations:**
+  - Existing `createPracticeSession` already enforces unlocked empty-session defaults server-side.
+  - Historical summaries should use a narrow Convex query rather than fetching full step documents.
+  - Browser `/sessions` smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
+---
 ## [2026-05-08 11:46] - S06-01-implement-private-step-list: Implement Private Step List
 Thread: 
 Run: 20260508-113654-5695 (iteration 1)
