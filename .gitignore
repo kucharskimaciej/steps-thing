@@ -8,6 +8,7 @@ coverage/
 backups/
 .DS_Store
 ralph-*.log
+.ralph/.tmp/
 .codex
 .agents/*
 !.agents/ralph/
