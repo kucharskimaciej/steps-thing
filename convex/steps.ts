@@ -22,6 +22,7 @@ import {
   practiceRecordInputValidator,
   updateStepInputValidator,
 } from "./model/validators";
+import { assertSessionOwner } from "./model/practiceSessions";
 import { enqueueMissingVideoProcessing } from "./videoProcessing";
 
 async function getOwnedSteps(ctx: QueryCtx, ownerId: string) {
@@ -279,6 +280,10 @@ export const recordPractice = mutation({
   handler: async (ctx, args) => {
     const ownerId = await requireUserId(ctx);
     const step = await getOwnedStep(ctx, args.id, ownerId);
+    if (args.record.collectionId) {
+      const session = await ctx.db.get(args.record.collectionId);
+      assertSessionOwner(session, ownerId);
+    }
     const practiceRecords = mergePracticeRecord({
       existing: step.practiceRecords,
       record: args.record,
