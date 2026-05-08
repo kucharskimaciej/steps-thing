@@ -4,7 +4,6 @@ Started: Thu May  7 13:09:57 CEST 2026
 ## Codebase Patterns
 - (add reusable patterns here)
 
----
 ## [2026-05-08 12:43:24 CEST] - S07-01-implement-sessions-list: Implement Sessions List
 Thread:
 Run: 20260508-123428-27940 (iteration 1)
@@ -616,4 +615,45 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-12
   - Public step query should accept raw route string and normalize Convex ID server-side.
   - Do not reuse private feed card on public pages; it exposes owner controls.
   - Next dev can rewrite `next-env.d.ts`; revert generated dev route reference before commit.
+---
+## [2026-05-08 12:52:25 CEST] - S07-02-implement-session-detail-and-cart-feed: Implement Session Detail And Cart Feed
+Thread:
+Run: 20260508-123428-27940 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 95108bf feat(sessions): implement session detail feed
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm test -- --run tests/components/session-detail.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/sessions/test-session -> PASS (auth redirect, no console errors)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/sessions/[sessionId]/page.tsx
+  - components/sessions/owned-session-detail.tsx
+  - components/sessions/session-cart-modal.tsx
+  - components/sessions/session-detail.tsx
+  - components/sessions/session-feed-card.tsx
+  - components/sessions/session-step-sidebar.tsx
+  - convex/practiceSessions.ts
+  - convex/steps.ts
+  - tests/components/session-detail.test.tsx
+- What was implemented
+  - Replaced session detail placeholder with owned session + owned steps loader.
+  - Added two-pane detail UI with active step, add/remove/clear, selected count, and locked read-only controls.
+  - Added session feed modal rendering selected steps only; practice records include `collectionId`.
+  - Added mobile initial feed opening and delete-session navigation.
+  - Hardened `recordPractice` to accept only owned session collection IDs.
+- **Learnings for future iterations:**
+  - Session add/remove/clear mutations already enforce owner and lock server-side.
+  - Session route params should be normalized server-side before lookup to avoid Convex ID validation crashes.
+  - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
 ---
