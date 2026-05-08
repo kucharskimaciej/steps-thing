@@ -5,6 +5,41 @@ Started: Thu May  7 13:09:57 CEST 2026
 - (add reusable patterns here)
 
 ---
+## [2026-05-08 11:46] - S06-01-implement-private-step-list: Implement Private Step List
+Thread: 
+Run: 20260508-113654-5695 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-113654-5695-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-113654-5695-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c484d03 feat(steps): implement private list
+- Post-commit status: clean after progress commit
+- Verification:
+  - Command: pnpm exec vitest run tests/components/step-list.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: browser smoke http://localhost:3001/steps -> PASS (auth redirect, no console errors)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/steps/page.tsx
+  - components/common/copy-to-clipboard.tsx
+  - components/steps/step-list.tsx
+  - components/steps/step-list-item.tsx
+  - lib/dates/relative-date.ts
+  - tests/components/step-list.test.tsx
+- What was implemented
+  - Replaced `/steps` placeholder with owned-step list query wrapper.
+  - Added dense newest-first step list rows with identifier, video links, edit, tags, notes, dates, variations, selected state, and visible shortlink copy.
+  - Added relative date helper and component coverage for ordering, fields, variation anchors, and copy state.
+- **Learnings for future iterations:**
+  - Existing `api.steps.listMySteps` is owner-scoped; `/steps` sorts by `createdAt` client-side to match this story without changing feed ordering.
+  - Browser smoke for authenticated pages redirects to Clerk sign-in in a fresh profile; component tests cover the private UI details.
+  - Dev-browser dependency install reports audit warnings in its own package; app verification unaffected.
+---
 
 ## [2026-05-07 22:10:12 +0200] - S05-02-build-search-overlay-ui: Build Search Overlay UI
 Thread:
