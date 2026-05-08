@@ -657,3 +657,40 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-12
   - Session route params should be normalized server-side before lookup to avoid Convex ID validation crashes.
   - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
 ---
+## [2026-05-08 13:00 CEST] - S07-03-implement-historical-session-detail: Implement Historical Session Detail
+Thread:
+Run: 20260508-123428-27940 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c9f4a73 feat(sessions): add historical practice feed
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm exec vitest run tests/components/historical-session.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/historical-sessions/1700086400000 -> PASS (auth redirect, no runtime errors; Clerk dev-key warning only)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/historical-sessions/[startOfDay]/page.tsx
+  - components/feed/steps-feed.tsx
+  - components/sessions/historical-session-feed.tsx
+  - convex/model/steps.ts
+  - convex/steps.ts
+  - tests/components/historical-session.test.tsx
+- What was implemented
+  - Replaced historical session placeholder with numeric param parsing and invalid-date state.
+  - Added owner-scoped historical practice query for steps practiced on the selected local day.
+  - Reused shared feed with historical title/empty state and inline edit support.
+  - Added tests for invalid params, dedupe, and owner isolation.
+- **Learnings for future iterations:**
+  - Historical list already links with raw `startOfDay`; detail should parse and reject unsafe values before querying.
+  - Step-level historical grouping naturally dedupes duplicate practice records because the feed renders steps, not records.
+  - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
+---
