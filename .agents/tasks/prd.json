@@ -384,7 +384,7 @@
     {
       "id": "S08-01-complete-automated-test-coverage",
       "title": "Complete Automated Test Coverage",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S07-03-implement-historical-session-detail"
       ],
@@ -393,7 +393,10 @@
         "Important algorithms have deterministic tests.",
         "Authorization rules are tested server-side.",
         "UI tests focus on behavior, not snapshots."
-      ]
+      ],
+      "startedAt": "2026-05-08T12:10:39.551734+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-08T12:10:39.551947+00:00"
     },
     {
       "id": "S08-02-perform-security-and-access-review",

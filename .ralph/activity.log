@@ -148,3 +148,8 @@
 [2026-05-08 12:59:04] Verification passed: typecheck lint test build convex and browser protected route check
 [2026-05-08 13:00:29] Updated progress log for S07-03 historical session detail
 [2026-05-08 13:01:29] ITERATION 3 end (duration=448s)
+[2026-05-08 14:10:39] ITERATION 1 start (mode=build story=S08-01-complete-automated-test-coverage)
+[2026-05-08 14:12:18] Audited existing S08-01 coverage and identified focused Convex handler gaps
+[2026-05-08 14:13:33] Added Convex handler coverage for auth, public reads, mutation rules, and session locks
+[2026-05-08 14:14:43] Verification passed for S08-01: lint typecheck test build
+[2026-05-08 14:15:42] Re-verified after final test edits: lint typecheck test build passed
