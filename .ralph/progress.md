@@ -540,3 +540,41 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-21
   - `recordPractice` server model already de-dupes by `startOfDay` plus optional collection ID.
   - Browser feed smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
 ---
+## [2026-05-08 12:19:12 CEST] - S06-02-implement-public-step-page: Implement Public Step Page
+Thread:
+Run: 20260508-121301-81105 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-121301-81105-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-121301-81105-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 157a65f feat(public-step): add shared step page
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/s/missing-step-id -> PASS
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - app/s/[stepId]/loading.tsx
+  - app/s/[stepId]/page.tsx
+  - components/steps/public-step-view.tsx
+  - convex/model/steps.ts
+  - convex/steps.ts
+  - lib/video/public-video-url.ts
+  - tests/components/public-step-page.test.tsx
+  - tests/convex-owner-apis.test.ts
+  - tests/video/public-video-url.test.ts
+- What was implemented
+  - Public `/s/[stepId]` route fetches a step without auth.
+  - Public query returns only read-only share fields.
+  - Public view renders step name, primary video, tags, loading, and not-found state.
+  - Primary video and snapshot use short-lived signed GCS read URLs.
+- **Learnings for future iterations:**
+  - Public step query should accept raw route string and normalize Convex ID server-side.
+  - Do not reuse private feed card on public pages; it exposes owner controls.
+  - Next dev can rewrite `next-env.d.ts`; revert generated dev route reference before commit.
+---
