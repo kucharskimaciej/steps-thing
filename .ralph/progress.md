@@ -43,6 +43,46 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-12
   - Historical summaries should use a narrow Convex query rather than fetching full step documents.
   - Browser `/sessions` smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
 ---
+## [2026-05-08 14:25 CEST] - S08-02-perform-security-and-access-review: Perform Security And Access Review
+Thread:
+Run: 20260508-141039-34678 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 01ca344 security(access): document owner boundaries
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: npm run typecheck -> PASS
+  - Command: npm run lint -> PASS
+  - Command: npm test -- --run -> PASS
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - components/steps/public-step-view.tsx
+  - convex/model/steps.ts
+  - docs/security-access-model.md
+  - lib/video/public-video-url.ts
+  - tests/convex-owner-apis.test.ts
+  - tests/convex-server-handlers.test.ts
+  - tests/security/video-storage-actions.test.ts
+  - tests/video/public-video-url.test.ts
+- What was implemented
+  - Documented the owner-scoped access model for private Convex APIs, sessions, public sharing, and Google Cloud Storage signed URL boundaries.
+  - Tightened public step sharing to expose one primary playback metadata object instead of the full videos array.
+  - Added server/security tests for cross-owner mutation rejection, public field exposure, and signed upload auth/key rules.
+- **Learnings for future iterations:**
+  - The public page needs storage metadata server-side only to issue short-lived GCS read URLs; the client receives signed URLs and display fields.
+  - Session APIs are private-only; session writes verify both session owner and referenced step owner.
+  - Activity helper path from the run prompt was unavailable, so activity entries were appended directly.
+  - Monitoring/logging vendor remains unresolved; current repo evidence is console plus `videoProcessingJobs` failed status.
+---
 ## [2026-05-08 11:46] - S06-01-implement-private-step-list: Implement Private Step List
 Thread: 
 Run: 20260508-113654-5695 (iteration 1)
