@@ -18,21 +18,17 @@ describe("resolvePublicStepVideoUrls", () => {
     expect(
       resolvePublicStepVideoUrls({
         step: {
-          videos: [
-            {
-              hash: "hash-a",
-              storageKey: "videos/user-a/hash-a",
-              snapshotStorageKey: "snapshots/user-a/hash-a.jpg",
-              width: 1920,
-              height: 1080,
-            },
-          ],
+          primaryVideo: {
+            storageKey: "videos/user-a/hash-a",
+            snapshotStorageKey: "snapshots/user-a/hash-a.jpg",
+            width: 1920,
+            height: 1080,
+          },
         },
         now,
       }),
     ).toEqual({
       primaryVideo: {
-        hash: "hash-a",
         storageKey: "videos/user-a/hash-a",
         snapshotStorageKey: "snapshots/user-a/hash-a.jpg",
         width: 1920,
@@ -53,7 +49,7 @@ describe("resolvePublicStepVideoUrls", () => {
 
   it("returns no primary video when the public step has no videos", () => {
     expect(
-      resolvePublicStepVideoUrls({ step: { videos: [] }, now: 0 }),
+      resolvePublicStepVideoUrls({ step: { primaryVideo: null }, now: 0 }),
     ).toEqual({ primaryVideo: null });
     expect(createSignedGcsUrl).not.toHaveBeenCalledWith(
       expect.objectContaining({ storageKey: undefined }),

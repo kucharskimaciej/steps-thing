@@ -384,7 +384,7 @@
     {
       "id": "S08-01-complete-automated-test-coverage",
       "title": "Complete Automated Test Coverage",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S07-03-implement-historical-session-detail"
       ],
@@ -393,12 +393,15 @@
         "Important algorithms have deterministic tests.",
         "Authorization rules are tested server-side.",
         "UI tests focus on behavior, not snapshots."
-      ]
+      ],
+      "startedAt": "2026-05-08T12:10:39.551734+00:00",
+      "completedAt": "2026-05-08T12:18:30.948311+00:00",
+      "updatedAt": "2026-05-08T12:18:30.947852+00:00"
     },
     {
       "id": "S08-02-perform-security-and-access-review",
       "title": "Perform Security And Access Review",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S08-01-complete-automated-test-coverage"
       ],
@@ -407,12 +410,15 @@
         "Access model is documented.",
         "Security checks are backed by tests.",
         "Public sharing behavior is explicit."
-      ]
+      ],
+      "startedAt": "2026-05-08T12:18:35.453626+00:00",
+      "completedAt": "2026-05-08T12:26:30.272736+00:00",
+      "updatedAt": "2026-05-08T12:26:30.272529+00:00"
     },
     {
       "id": "S08-03-create-release-smoke-test-and-operational-checklist",
       "title": "Create Release Smoke Test And Operational Checklist",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S08-02-perform-security-and-access-review"
       ],
@@ -421,7 +427,10 @@
         "Release validation does not depend on memory.",
         "Operational requirements are documented before production cutover.",
         "Smoke test covers all primary user workflows."
-      ]
+      ],
+      "startedAt": "2026-05-08T12:26:35.584605+00:00",
+      "completedAt": "2026-05-08T12:31:48.362372+00:00",
+      "updatedAt": "2026-05-08T12:31:48.362205+00:00"
     }
   ]
 }
