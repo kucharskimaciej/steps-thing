@@ -240,7 +240,7 @@
     {
       "id": "S05-01-implement-search-filters-scoring-and-sorting",
       "title": "Implement Search Filters, Scoring, And Sorting",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S04-04-implement-inline-edit-modal"
       ],
@@ -248,12 +248,15 @@
       "acceptanceCriteria": [
         "Search behavior matches the legacy spec.",
         "Search helpers are independent from React components."
-      ]
+      ],
+      "startedAt": "2026-05-07T19:55:57.895687+00:00",
+      "completedAt": "2026-05-07T20:02:27.601632+00:00",
+      "updatedAt": "2026-05-07T20:02:27.601197+00:00"
     },
     {
       "id": "S05-02-build-search-overlay-ui",
       "title": "Build Search Overlay UI",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S05-01-implement-search-filters-scoring-and-sorting"
       ],
@@ -261,12 +264,15 @@
       "acceptanceCriteria": [
         "Search UI can express every search state.",
         "Feed reacts immediately enough without excessive re-rendering."
-      ]
+      ],
+      "startedAt": "2026-05-07T20:02:33.197130+00:00",
+      "completedAt": "2026-05-07T20:11:24.123769+00:00",
+      "updatedAt": "2026-05-07T20:11:24.123564+00:00"
     },
     {
       "id": "S05-03-build-virtualized-feed-and-step-actions",
       "title": "Build Virtualized Feed And Step Actions",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S05-02-build-search-overlay-ui"
       ],
@@ -274,12 +280,15 @@
       "acceptanceCriteria": [
         "Feed is usable with large step collections.",
         "Step card behavior matches the spec."
-      ]
+      ],
+      "startedAt": "2026-05-07T20:11:28.482447+00:00",
+      "completedAt": "2026-05-07T20:26:08.584680+00:00",
+      "updatedAt": "2026-05-07T20:26:08.584502+00:00"
     },
     {
       "id": "S05-04-implement-view-and-practice-recording",
       "title": "Implement View And Practice Recording",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S05-03-build-virtualized-feed-and-step-actions"
       ],
@@ -287,7 +296,10 @@
       "acceptanceCriteria": [
         "Duplicate prevention exists client-side for views and server-side for practice.",
         "Feed action state updates after mutations."
-      ]
+      ],
+      "startedAt": "2026-05-07T20:26:13.002846+00:00",
+      "completedAt": "2026-05-07T20:33:44.017818+00:00",
+      "updatedAt": "2026-05-07T20:33:44.017426+00:00"
     },
     {
       "id": "S06-01-implement-private-step-list",

@@ -1,6 +1,10 @@
 # Activity Log
 
 ## Run Summary
+- 2026-05-07 22:33:43 | run=20260507-215557-6595 | iter=4 | mode=build | story=S05-04-implement-view-and-practice-recording | duration=451s | status=success
+- 2026-05-07 22:26:08 | run=20260507-215557-6595 | iter=3 | mode=build | story=S05-03-build-virtualized-feed-and-step-actions | duration=880s | status=success
+- 2026-05-07 22:11:23 | run=20260507-215557-6595 | iter=2 | mode=build | story=S05-02-build-search-overlay-ui | duration=530s | status=success
+- 2026-05-07 22:02:27 | run=20260507-215557-6595 | iter=1 | mode=build | story=S05-01-implement-search-filters-scoring-and-sorting | duration=390s | status=success
 - 2026-05-07 21:39:24 | run=20260507-205447-62953 | iter=4 | mode=build | story=S04-04-implement-inline-edit-modal | duration=549s | status=success
 - 2026-05-07 21:30:11 | run=20260507-205447-62953 | iter=3 | mode=build | story=S04-03-implement-edit-step-page | duration=689s | status=success
 - 2026-05-07 21:18:37 | run=20260507-205447-62953 | iter=2 | mode=build | story=S04-02-implement-create-step-page | duration=663s | status=success
@@ -76,3 +80,30 @@
 [2026-05-07 21:36:10] Completed security performance regression review for S04-04
 [2026-05-07 21:37:30] Updated progress log for S04-04 inline edit modal
 [2026-05-07 21:39:24] ITERATION 4 end (duration=549s)
+[2026-05-07 21:55:58] ITERATION 1 start (mode=build story=S05-01-implement-search-filters-scoring-and-sorting)
+[2026-05-07 21:56:54] Start S05-01 search filters scoring sorting
+[2026-05-07 21:59:23] Implemented pure search helpers and filter/sort tests
+[2026-05-07 22:00:22] Verification passed: pnpm typecheck, pnpm lint, pnpm test -- --run, pnpm build
+[2026-05-07 22:00:22] Completed security performance regression review for S05-01
+[2026-05-07 22:01:11] Updated progress log for S05-01 search filters scoring sorting
+[2026-05-07 22:02:27] ITERATION 1 end (duration=390s)
+[2026-05-07 22:02:33] ITERATION 2 start (mode=build story=S05-02-build-search-overlay-ui)
+[2026-05-07 22:05:49] Implemented search overlay components and feed wiring
+[2026-05-07 22:09:13] Verification passed: pnpm typecheck, pnpm lint, pnpm test -- --run, pnpm build; browser reached auth gate for /feed
+[2026-05-07 22:09:45] Completed security performance regression review for S05-02
+[2026-05-07 22:10:32] Updated progress log for S05-02 search overlay UI
+[2026-05-07 22:11:23] ITERATION 2 end (duration=530s)
+[2026-05-07 22:11:28] ITERATION 3 start (mode=build story=S05-03-build-virtualized-feed-and-step-actions)
+[2026-05-07 22:19:48] Major code changes complete for S05-03 feed actions
+[2026-05-07 22:21:41] Verification complete for S05-03: typecheck lint test build browser check
+[2026-05-07 22:21:56] Final security performance regression review complete for S05-03
+[2026-05-07 22:22:58] Updated verification after clearing generated Next dev cache for S05-03
+[2026-05-07 22:23:47] Updated progress log for S05-03 feed actions
+[2026-05-07 22:26:08] ITERATION 3 end (duration=880s)
+[2026-05-07 22:26:13] ITERATION 4 start (mode=build story=S05-04-implement-view-and-practice-recording)
+[2026-05-07 22:26:49] Start S05-04 implement view and practice recording
+[2026-05-07 22:28:07] Added feed view mutation and practice recording UI
+[2026-05-07 22:31:12] Verification passed for S05-04: typecheck, lint, tests, build, browser auth-route smoke
+[2026-05-07 22:32:05] Completed security performance regression review for S05-04
+[2026-05-07 22:32:52] Updated progress log for S05-04 view and practice recording
+[2026-05-07 22:33:43] ITERATION 4 end (duration=451s)

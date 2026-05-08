@@ -6,6 +6,46 @@ Started: Thu May  7 13:09:57 CEST 2026
 
 ---
 
+## [2026-05-07 22:10:12 +0200] - S05-02-build-search-overlay-ui: Build Search Overlay UI
+Thread:
+Run: 20260507-215557-6595 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c0e2db3 feat(search): add feed overlay controls
+- Post-commit status: `clean` after progress commit
+- Verification:
+  - Command: `pnpm test -- --run tests/components/search-overlay.test.tsx` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; overlay behavior verified by component tests
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/.tmp/prompt-20260507-215557-6595-2.md
+  - .ralph/.tmp/story-20260507-215557-6595-2.json
+  - .ralph/.tmp/story-20260507-215557-6595-2.md
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-2.log
+  - components/forms/three-state-tag.tsx
+  - components/search/search-button.tsx
+  - components/search/search-filters.tsx
+  - components/search/search-overlay.tsx
+  - components/search/search-sort.tsx
+  - components/steps/feed-step-list.tsx
+  - tests/components/search-overlay.test.tsx
+- What was implemented
+  Feed search button, active matched-count badge, debounced search overlay, text query, feeling tri-state controls, include/exclude tag filters, artist filter, sort/direction controls, clear action, back-to-results close action, search-result rendering, and scroll-to-top on applied search changes.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep overlay draft state local, debounce before writing parent feed search state, then reuse pure `querySearch` for rendering.
+  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in the dev browser without credentials; component tests provide the authenticated UI coverage.
+  - Useful context: existing tag/artist query is used when available, with loaded-step fallback options so the overlay remains useful during query loading.
+---
+
 ## [2026-05-07 21:37:30 +0200] - S04-04-implement-inline-edit-modal: Implement Inline Edit Modal
 Thread:
 Run: 20260507-205447-62953 (iteration 4)
@@ -348,4 +388,120 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-20
   - Patterns discovered: create/edit form orchestration works best with a shared form plus thin workflow components for routing/mutations.
   - Gotchas encountered: upload field owns local video state, so form reset must remount it with `resetSignal`.
   - Useful context: protected `/steps/new` redirects to Clerk sign-in in browser tests without credentials; component tests cover the authed workflow with mocked Convex boundaries.
+---
+
+## [2026-05-07 22:00:44 +0200] - S05-01-implement-search-filters-scoring-and-sorting: Implement Search Filters, Scoring, And Sorting
+Thread:
+Run: 20260507-215557-6595 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 4a4788d feat(search): add feed search helpers
+- Post-commit status: `clean`
+- Verification:
+  - Command: `pnpm test tests/search/search-helpers.test.ts -- --run` -> PASS
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/.tmp/prompt-20260507-215557-6595-1.md
+  - .ralph/.tmp/story-20260507-215557-6595-1.json
+  - .ralph/.tmp/story-20260507-215557-6595-1.md
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-1.log
+  - lib/search/filter-steps.ts
+  - lib/search/query-search.ts
+  - lib/search/score-result.ts
+  - lib/search/sort-results.ts
+  - lib/search/types.ts
+  - tests/search/search-helpers.test.ts
+- What was implemented
+  Pure feed search state/types, default search, tag/artist/feeling filters, text fuzzy matching, score calculation, score/view/practice/added/random sorting, reverse secondary `updatedAt` ordering, and unit coverage for required filter/sort cases.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep search helpers framework-free so feed UI, sessions, and tests can reuse the same result contract.
+  - Gotchas encountered: Ralph task metadata was already modified before code changes; left it untouched and committed staged run metadata per build instructions.
+  - Useful context: fuzzy matching uses a local thresholded Levenshtein scorer to avoid adding a dependency while preserving Fuse-like `0.4` threshold semantics.
+---
+
+## [2026-05-07 22:23:20 CEST] - S05-03-build-virtualized-feed-and-step-actions: Build Virtualized Feed And Step Actions
+Thread:
+Run: 20260507-215557-6595 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 0c6a6e7 feat(feed): add virtualized step feed
+- Post-commit status: `.ralph/runs/run-20260507-215557-6595-iter-3.log` modified by active run logging before progress commit
+- Verification:
+  - Command: `pnpm typecheck` -> PASS
+  - Command: `pnpm lint` -> PASS
+  - Command: `pnpm test -- --run` -> PASS
+  - Command: `pnpm build` -> PASS
+  - Command: `dev-browser http://localhost:3001/feed` -> PASS, protected route redirected to sign-in without app crash; feed workflow verified by component tests
+  - Command: `CI=1 pnpm exec convex dev --once --tail-logs disable` -> SKIP, no Convex schema/functions changed
+- Files changed:
+  - components/feed/feed-step-card.tsx
+  - components/feed/options-menu.tsx
+  - components/feed/step-actions.tsx
+  - components/feed/steps-feed.tsx
+  - components/steps/feed-step-list.tsx
+  - components/steps/step-tags.tsx
+  - components/steps/variation-feed-modal.tsx
+  - tests/components/feed.test.tsx
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-3.log
+- What was implemented
+  Main `/feed` now queries owned steps through the existing wrapper, applies search/filter/sort, renders a virtualized card feed, sizes primary videos from stored dimensions with a `60vh` cap, mounts visible videos only, displays tags, variation counts, practice action, options menu, copy link, and inline edit entry. Variation overlay shows same-key related steps only.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep `FeedStepList` as the Convex/auth wrapper and put testable feed behavior in `components/feed/steps-feed.tsx`.
+  - Gotchas encountered: protected `/feed` redirects to Clerk sign-in in browser checks without credentials; component tests cover authed feed actions.
+  - Useful context: current feed playback uses stored `storageKey` as the video source until a later signed-read URL story replaces it.
+---
+## [2026-05-07 22:32:24 +0200] - S05-04-implement-view-and-practice-recording: Implement View And Practice Recording
+Thread:
+Run: 20260507-215557-6595 (iteration 4)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260507-215557-6595-iter-4.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 14d81c7 feat(feed): record views and practice
+- Post-commit status: clean after progress commit
+- Verification:
+  - Command: pnpm test tests/components/feed.test.tsx tests/practice/has-recorded-practice.test.ts tests/convex-owner-apis.test.ts --run -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: browser smoke http://localhost:3001/feed -> PASS (auth redirect, no console errors)
+  - Command: git diff --check -> PASS
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - .ralph/runs/run-20260507-215557-6595-iter-4.log
+  - .ralph/.tmp/prompt-20260507-215557-6595-4.md
+  - .ralph/.tmp/story-20260507-215557-6595-4.json
+  - .ralph/.tmp/story-20260507-215557-6595-4.md
+  - components/feed/feed-step-card.tsx
+  - components/feed/step-actions.tsx
+  - components/practice/record-practice-button.tsx
+  - lib/feed/viewed-steps-memory.ts
+  - lib/practice/has-recorded-practice.ts
+  - tests/components/feed.test.tsx
+  - tests/convex-owner-apis.test.ts
+  - tests/practice/has-recorded-practice.test.ts
+- What was implemented
+  - Connected feed player `viewed` events to `recordStepView` with per-load client de-dupe.
+  - Added practiced-state helper/button with optimistic UI and disabled duplicate clicks.
+  - Covered same-day general vs collection-specific practice behavior.
+- **Learnings for future iterations:**
+  - Feed player already emits `onViewed`; only feed card wiring was missing.
+  - `recordPractice` server model already de-dupes by `startOfDay` plus optional collection ID.
+  - Browser feed smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
 ---
