@@ -229,6 +229,34 @@ export function rankVariationCandidates({
     .slice(0, 20);
 }
 
+export function selectHistoricalPracticeSteps({
+  steps,
+  ownerId,
+  startOfDay,
+}: {
+  steps: Doc<"steps">[];
+  ownerId: string;
+  startOfDay: number;
+}): Doc<"steps">[] {
+  return steps
+    .filter(
+      (step) =>
+        step.ownerId === ownerId &&
+        step.practiceRecords.some(
+          (record) => record.startOfDay === startOfDay,
+        ),
+    )
+    .sort((left, right) => {
+      const leftLatestPractice = latestPracticeDateForDay(left, startOfDay);
+      const rightLatestPractice = latestPracticeDateForDay(right, startOfDay);
+
+      return (
+        rightLatestPractice - leftLatestPractice ||
+        right.updatedAt - left.updatedAt
+      );
+    });
+}
+
 export function toPublicStep(step: Doc<"steps">): PublicStep {
   return {
     _id: step._id,
@@ -246,4 +274,12 @@ export function toPublicStep(step: Doc<"steps">): PublicStep {
 
 export function publicStepId(id: Id<"steps">): Id<"steps"> {
   return id;
+}
+
+function latestPracticeDateForDay(step: Doc<"steps">, startOfDay: number) {
+  return step.practiceRecords.reduce(
+    (latest, record) =>
+      record.startOfDay === startOfDay ? Math.max(latest, record.date) : latest,
+    0,
+  );
 }

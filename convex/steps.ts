@@ -15,6 +15,7 @@ import {
   mergePracticeRecord,
   nextIdentifier,
   rankVariationCandidates,
+  selectHistoricalPracticeSteps,
   toPublicStep,
 } from "./model/steps";
 import {
@@ -22,6 +23,7 @@ import {
   practiceRecordInputValidator,
   updateStepInputValidator,
 } from "./model/validators";
+import { assertSessionOwner } from "./model/practiceSessions";
 import { enqueueMissingVideoProcessing } from "./videoProcessing";
 
 async function getOwnedSteps(ctx: QueryCtx, ownerId: string) {
@@ -89,6 +91,45 @@ export const listMySteps = query({
     const steps = await getOwnedSteps(ctx, ownerId);
 
     return steps.sort((left, right) => right.updatedAt - left.updatedAt);
+  },
+});
+
+export const listMyHistoricalPracticeDays = query({
+  args: {},
+  handler: async (ctx) => {
+    const ownerId = await requireUserId(ctx);
+    const steps = await getOwnedSteps(ctx, ownerId);
+    const practicedStepsByDay = new Map<number, Set<Id<"steps">>>();
+
+    for (const step of steps) {
+      for (const record of step.practiceRecords) {
+        const practicedSteps =
+          practicedStepsByDay.get(record.startOfDay) ?? new Set<Id<"steps">>();
+        practicedSteps.add(step._id);
+        practicedStepsByDay.set(record.startOfDay, practicedSteps);
+      }
+    }
+
+    return [...practicedStepsByDay.entries()]
+      .map(([startOfDay, practicedSteps]) => ({
+        startOfDay,
+        practicedStepCount: practicedSteps.size,
+      }))
+      .sort((left, right) => right.startOfDay - left.startOfDay);
+  },
+});
+
+export const getHistoricalPracticeSteps = query({
+  args: { startOfDay: v.number() },
+  handler: async (ctx, args) => {
+    const ownerId = await requireUserId(ctx);
+    const steps = await getOwnedSteps(ctx, ownerId);
+
+    return selectHistoricalPracticeSteps({
+      steps,
+      ownerId,
+      startOfDay: args.startOfDay,
+    });
   },
 });
 
@@ -254,6 +295,10 @@ export const recordPractice = mutation({
   handler: async (ctx, args) => {
     const ownerId = await requireUserId(ctx);
     const step = await getOwnedStep(ctx, args.id, ownerId);
+    if (args.record.collectionId) {
+      const session = await ctx.db.get(args.record.collectionId);
+      assertSessionOwner(session, ownerId);
+    }
     const practiceRecords = mergePracticeRecord({
       existing: step.practiceRecords,
       record: args.record,

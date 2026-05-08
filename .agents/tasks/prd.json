@@ -336,7 +336,7 @@
     {
       "id": "S07-01-implement-sessions-list",
       "title": "Implement Sessions List",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S06-02-implement-public-step-page"
       ],
@@ -344,12 +344,15 @@
       "acceptanceCriteria": [
         "`/sessions` no longer renders a placeholder.",
         "Both saved and historical session workflows are discoverable."
-      ]
+      ],
+      "startedAt": "2026-05-08T10:34:28.441853+00:00",
+      "completedAt": "2026-05-08T10:44:12.700029+00:00",
+      "updatedAt": "2026-05-08T10:44:12.699835+00:00"
     },
     {
       "id": "S07-02-implement-session-detail-and-cart-feed",
       "title": "Implement Session Detail And Cart Feed",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S07-01-implement-sessions-list"
       ],
@@ -357,12 +360,15 @@
       "acceptanceCriteria": [
         "Session detail restores legacy intended behavior.",
         "Server-side lock protection cannot be bypassed by UI manipulation."
-      ]
+      ],
+      "startedAt": "2026-05-08T10:44:17.692088+00:00",
+      "completedAt": "2026-05-08T10:53:57.238717+00:00",
+      "updatedAt": "2026-05-08T10:53:57.238537+00:00"
     },
     {
       "id": "S07-03-implement-historical-session-detail",
       "title": "Implement Historical Session Detail",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "S07-02-implement-session-detail-and-cart-feed"
       ],
@@ -370,7 +376,10 @@
       "acceptanceCriteria": [
         "Historical practice route no longer renders a placeholder.",
         "Grouping behavior matches the spec."
-      ]
+      ],
+      "startedAt": "2026-05-08T10:54:01.737364+00:00",
+      "completedAt": "2026-05-08T11:01:29.631078+00:00",
+      "updatedAt": "2026-05-08T11:01:29.630891+00:00"
     },
     {
       "id": "S08-01-complete-automated-test-coverage",

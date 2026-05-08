@@ -59,6 +59,26 @@ export const getMyPracticeSession = query({
   },
 });
 
+export const getMyPracticeSessionById = query({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    const ownerId = await requireUserId(ctx);
+    const id = ctx.db.normalizeId("practiceSessions", args.id);
+
+    if (!id) {
+      return null;
+    }
+
+    const session = await ctx.db.get(id);
+
+    if (!session || session.ownerId !== ownerId) {
+      return null;
+    }
+
+    return session;
+  },
+});
+
 export const createPracticeSession = mutation({
   args: { name: v.string(), stepIds: v.optional(v.array(v.id("steps"))) },
   handler: async (ctx, args) => {

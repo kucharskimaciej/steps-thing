@@ -17,6 +17,9 @@ type StepsFeedProps = {
   tagOptions?: string[];
   artistOptions?: string[];
   origin?: string;
+  eyebrow?: string;
+  title?: string;
+  emptyLabel?: string;
   onEditStep: (stepId: string) => void;
 };
 
@@ -75,6 +78,9 @@ export function StepsFeed({
   tagOptions,
   artistOptions,
   origin,
+  eyebrow = "Steps",
+  title = "Feed",
+  emptyLabel = "No steps yet.",
   onEditStep,
 }: StepsFeedProps) {
   const [searchState, setSearchState] =
@@ -139,9 +145,9 @@ export function StepsFeed({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium uppercase text-[var(--muted-foreground)]">
-            Steps
+            {eyebrow}
           </p>
-          <h1 className="mt-2 text-3xl font-semibold">Feed</h1>
+          <h1 className="mt-2 text-3xl font-semibold">{title}</h1>
         </div>
         <SearchButton
           isActive={searchIsActive}
@@ -152,7 +158,7 @@ export function StepsFeed({
 
       {steps.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
-          No steps yet.
+          {emptyLabel}
         </p>
       ) : visibleSteps.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border)] px-4 py-5 text-sm text-[var(--muted-foreground)]">

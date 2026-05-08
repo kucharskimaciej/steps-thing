@@ -4,6 +4,44 @@ Started: Thu May  7 13:09:57 CEST 2026
 ## Codebase Patterns
 - (add reusable patterns here)
 
+## [2026-05-08 12:43:24 CEST] - S07-01-implement-sessions-list: Implement Sessions List
+Thread:
+Run: 20260508-123428-27940 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 18a41b9 feat(sessions): implement sessions list
+- Post-commit status: clean after progress commit
+- Verification:
+  - Command: pnpm test -- --run tests/components/sessions-list.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/sessions -> PASS (auth redirect, no console errors)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/sessions/page.tsx
+  - components/app-shell/mobile-navigation.tsx
+  - components/app-shell/top-bar.tsx
+  - components/sessions/historical-session-card.tsx
+  - components/sessions/session-card.tsx
+  - components/sessions/sessions-list.tsx
+  - convex/steps.ts
+  - tests/components/sessions-list.test.tsx
+- What was implemented
+  - Replaced `/sessions` placeholder with saved sessions and historical practice sections.
+  - Added default empty session creation with `Practice dd MMM` naming.
+  - Added historical day summaries grouped by unique practiced steps and sorted newest first.
+  - Added Sessions navigation links for workflow discoverability.
+- **Learnings for future iterations:**
+  - Existing `createPracticeSession` already enforces unlocked empty-session defaults server-side.
+  - Historical summaries should use a narrow Convex query rather than fetching full step documents.
+  - Browser `/sessions` smoke redirects to Clerk sign-in without an authenticated profile; UI behavior is covered by component tests.
 ---
 ## [2026-05-08 11:46] - S06-01-implement-private-step-list: Implement Private Step List
 Thread: 
@@ -577,4 +615,82 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-12
   - Public step query should accept raw route string and normalize Convex ID server-side.
   - Do not reuse private feed card on public pages; it exposes owner controls.
   - Next dev can rewrite `next-env.d.ts`; revert generated dev route reference before commit.
+---
+## [2026-05-08 12:52:25 CEST] - S07-02-implement-session-detail-and-cart-feed: Implement Session Detail And Cart Feed
+Thread:
+Run: 20260508-123428-27940 (iteration 2)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-2.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 95108bf feat(sessions): implement session detail feed
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm test -- --run tests/components/session-detail.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/sessions/test-session -> PASS (auth redirect, no console errors)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/sessions/[sessionId]/page.tsx
+  - components/sessions/owned-session-detail.tsx
+  - components/sessions/session-cart-modal.tsx
+  - components/sessions/session-detail.tsx
+  - components/sessions/session-feed-card.tsx
+  - components/sessions/session-step-sidebar.tsx
+  - convex/practiceSessions.ts
+  - convex/steps.ts
+  - tests/components/session-detail.test.tsx
+- What was implemented
+  - Replaced session detail placeholder with owned session + owned steps loader.
+  - Added two-pane detail UI with active step, add/remove/clear, selected count, and locked read-only controls.
+  - Added session feed modal rendering selected steps only; practice records include `collectionId`.
+  - Added mobile initial feed opening and delete-session navigation.
+  - Hardened `recordPractice` to accept only owned session collection IDs.
+- **Learnings for future iterations:**
+  - Session add/remove/clear mutations already enforce owner and lock server-side.
+  - Session route params should be normalized server-side before lookup to avoid Convex ID validation crashes.
+  - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
+---
+## [2026-05-08 13:00 CEST] - S07-03-implement-historical-session-detail: Implement Historical Session Detail
+Thread:
+Run: 20260508-123428-27940 (iteration 3)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-3.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-123428-27940-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c9f4a73 feat(sessions): add historical practice feed
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm exec vitest run tests/components/historical-session.test.tsx -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm lint -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> PASS
+  - Command: dev-browser http://localhost:3001/historical-sessions/1700086400000 -> PASS (auth redirect, no runtime errors; Clerk dev-key warning only)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - app/(authenticated)/historical-sessions/[startOfDay]/page.tsx
+  - components/feed/steps-feed.tsx
+  - components/sessions/historical-session-feed.tsx
+  - convex/model/steps.ts
+  - convex/steps.ts
+  - tests/components/historical-session.test.tsx
+- What was implemented
+  - Replaced historical session placeholder with numeric param parsing and invalid-date state.
+  - Added owner-scoped historical practice query for steps practiced on the selected local day.
+  - Reused shared feed with historical title/empty state and inline edit support.
+  - Added tests for invalid params, dedupe, and owner isolation.
+- **Learnings for future iterations:**
+  - Historical list already links with raw `startOfDay`; detail should parse and reject unsafe values before querying.
+  - Step-level historical grouping naturally dedupes duplicate practice records because the feed renders steps, not records.
+  - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
 ---
