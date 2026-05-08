@@ -368,7 +368,7 @@
     {
       "id": "S07-03-implement-historical-session-detail",
       "title": "Implement Historical Session Detail",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "S07-02-implement-session-detail-and-cart-feed"
       ],
@@ -378,8 +378,8 @@
         "Grouping behavior matches the spec."
       ],
       "startedAt": "2026-05-08T10:54:01.737364+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-05-08T10:54:01.737669+00:00"
+      "completedAt": "2026-05-08T11:01:29.631078+00:00",
+      "updatedAt": "2026-05-08T11:01:29.630891+00:00"
     },
     {
       "id": "S08-01-complete-automated-test-coverage",
