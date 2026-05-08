@@ -694,3 +694,32 @@ Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-12
   - Step-level historical grouping naturally dedupes duplicate practice records because the feed renders steps, not records.
   - Authenticated browser smoke redirects to Clerk sign-in; component tests cover post-auth UI behavior.
 ---
+## [2026-05-08 14:16 CEST] - S08-01-complete-automated-test-coverage: Complete Automated Test Coverage
+Thread:
+Run: 20260508-141039-34678 (iteration 1)
+Run log: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-1.log
+Run summary: /Users/maciejkucharski/work/steps-thing/.ralph/runs/run-20260508-141039-34678-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c31a582 test(convex): cover critical server rules
+- Post-commit status: `clean`
+- Verification:
+  - Command: pnpm lint -> PASS
+  - Command: pnpm typecheck -> PASS
+  - Command: pnpm test -- --run -> PASS
+  - Command: pnpm build -> PASS
+  - Command: CI=1 pnpm exec convex dev --once --tail-logs disable -> SKIP (no Convex schema/functions changed)
+- Files changed:
+  - .agents/tasks/prd.json
+  - .ralph/activity.log
+  - .ralph/progress.md
+  - tests/convex-server-handlers.test.ts
+- What was implemented
+  - Audited existing domain, search, practice, date grouping, component, and Convex model test coverage against S08-01.
+  - Added direct Convex handler tests for private auth requirements, unauthenticated public step reads, create identifier increment, update variation-group merging, and locked session edit rejection.
+  - Kept UI tests behavior-focused; no snapshots added.
+- **Learnings for future iterations:**
+  - Convex registered functions expose `_handler` at runtime but hide it from public TypeScript types, so handler tests need a small local cast.
+  - Existing feed and step-list tests already cover practice button states and clipboard behavior.
+  - Test-only changes still pass the full Next build because test files are included in TypeScript checks.
+---
