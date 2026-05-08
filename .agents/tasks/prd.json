@@ -418,7 +418,7 @@
     {
       "id": "S08-03-create-release-smoke-test-and-operational-checklist",
       "title": "Create Release Smoke Test And Operational Checklist",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "S08-02-perform-security-and-access-review"
       ],
@@ -427,7 +427,10 @@
         "Release validation does not depend on memory.",
         "Operational requirements are documented before production cutover.",
         "Smoke test covers all primary user workflows."
-      ]
+      ],
+      "startedAt": "2026-05-08T12:26:35.584605+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-05-08T12:26:35.584812+00:00"
     }
   ]
 }
