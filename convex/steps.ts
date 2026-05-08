@@ -15,6 +15,7 @@ import {
   mergePracticeRecord,
   nextIdentifier,
   rankVariationCandidates,
+  selectHistoricalPracticeSteps,
   toPublicStep,
 } from "./model/steps";
 import {
@@ -115,6 +116,20 @@ export const listMyHistoricalPracticeDays = query({
         practicedStepCount: practicedSteps.size,
       }))
       .sort((left, right) => right.startOfDay - left.startOfDay);
+  },
+});
+
+export const getHistoricalPracticeSteps = query({
+  args: { startOfDay: v.number() },
+  handler: async (ctx, args) => {
+    const ownerId = await requireUserId(ctx);
+    const steps = await getOwnedSteps(ctx, ownerId);
+
+    return selectHistoricalPracticeSteps({
+      steps,
+      ownerId,
+      startOfDay: args.startOfDay,
+    });
   },
 });
 
